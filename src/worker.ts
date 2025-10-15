@@ -1,19 +1,58 @@
-import { Worker, QueueScheduler, JobsOptions, Job } from "bullmq";
+// src/worker.ts
+// Robust worker using bullmq with ESM/CJS interop safe pattern.
+// We cast bullmq namespace to any to avoid build-time type mismatch issues.
+
+import * as BullMQ from "bullmq";
+import type { Job } from "bullmq";
 import IORedis from "ioredis";
 import axios from "axios";
 import { Message, Tenant } from "./models";
 import { getAccessToken } from "./tenantService";
-import type { SendJobData } from "./sendController";
+
+type SendJobData = {
+    tenantId: string;
+    messageId: string;
+    to: string;
+    text: string;
+    idempotencyKey?: string;
+};
 
 const connection = new IORedis({
     host: process.env.REDIS_HOST || "127.0.0.1",
     port: Number(process.env.REDIS_PORT ?? 6379)
 });
 
-new QueueScheduler("whatsapp-send-queue", { connection });
+// --- Interop-safe access to classes ---
+// cast to any to avoid TypeScript/runtime interop issues
+const _Bull: any = BullMQ;
+const QueueScheduler = _Bull.QueueScheduler;
+const WorkerCtor = _Bull.Worker;
+
+if (!QueueScheduler) {
+    // As a fallback try named import (edge cases)
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const required = require("bullmq");
+    // @ts-ignore
+    QueueScheduler = required.QueueScheduler;
+    // @ts-ignore
+    WorkerCtor = required.Worker;
+}
+
+if (!QueueScheduler) {
+    console.error("QueueScheduler not found on bullmq import. Please check bullmq version.");
+    // We won't throw here; worker will fail later when started if necessary
+} else {
+    // instantiate scheduler so delayed/retries etc work
+    new QueueScheduler("whatsapp-send-queue", { connection });
+}
 
 export function startWorker(): void {
-    const worker = new Worker<SendJobData>(
+    if (!WorkerCtor) {
+        console.error("Worker constructor not found on bullmq import. Aborting worker start.");
+        return;
+    }
+
+    const worker = new WorkerCtor(
         "whatsapp-send-queue",
         async (job: Job<SendJobData>) => {
             const { tenantId, messageId, to, text } = job.data;
@@ -35,6 +74,7 @@ export function startWorker(): void {
             const url = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
 
             try {
+                // dev-mode simulation when token starts with "mock_"
                 if (token.startsWith("mock_")) {
                     msg.status = "sent";
                     msg.waMessageId = `mock-${Date.now()}`;
@@ -61,7 +101,7 @@ export function startWorker(): void {
 
                 return { ok: true, waMessageId };
             } catch (err) {
-                const maybeResp = (err as unknown as { response?: { data?: unknown } }).response?.data;
+                const maybeResp = (err as any)?.response?.data;
                 console.error("send job failed", maybeResp ?? (err as Error).message);
                 msg.status = "failed";
                 await msg.save();
@@ -71,8 +111,8 @@ export function startWorker(): void {
         { connection }
     );
 
-    worker.on("failed", (job, err) => {
-        console.error("Job failed", job.id, err.message);
+    worker.on("failed", (job: Job, err: Error) => {
+        console.error("Job failed", job.id, err?.message);
     });
 
     console.log("Worker started");

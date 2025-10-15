@@ -8,7 +8,8 @@ const PORT = Number(process.env.PORT ?? 3000);
 async function start(): Promise<void> {
     await connectWithRetry();
     app.listen(PORT, () => {
-        console.log(`Server listening on port ${PORT}`);
+        console.log(`Server listening on port - ${PORT}`);
+        console.log('working')
     });
 }
 
