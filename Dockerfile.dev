@@ -1,16 +1,24 @@
+# Dockerfile.dev (fixed: use env vars for npm config)
 FROM node:20
 
 WORKDIR /usr/src/app
 
-# Copy manifests first for layer caching
-COPY package.json package-lock.json* ./
+# copy package manifests first to leverage Docker cache
+COPY package*.json ./
 
-RUN npm ci --silent
+# Set npm config via environment variables (avoid `npm config set` parsing issues)
+ENV NPM_CONFIG_LEGACY_PEER_DEPS=true \
+    NPM_CONFIG_UNSAFE_PERM=true \
+    NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false \
+    NODE_ENV=development
 
-# Copy the rest (but in compose we mount the source so this is mostly for first boot)
+# install dependencies (dev)
+RUN npm i --silent --no-audit --no-fund
+
+# copy rest of the sources (will be mounted in docker-compose for live reload)
 COPY . .
 
 EXPOSE 3000
 
-# ts-node-dev will handle watching & hot-reload inside container
 CMD ["npm", "run", "dev"]
