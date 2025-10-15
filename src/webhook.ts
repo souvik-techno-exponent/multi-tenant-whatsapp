@@ -23,28 +23,45 @@ interface WebhookMessage {
     id: string;
     type?: string;
     text?: { body?: string };
+    // other fields (image, interactive, location, etc.) may exist
+    [key: string]: any;
 }
 
 interface WebhookStatus {
     id: string;
     status?: string;
+    [key: string]: any;
 }
 
 interface WebhookValue {
     metadata?: { phone_number_id?: string };
     messages?: WebhookMessage[];
     statuses?: WebhookStatus[];
+    [key: string]: any;
+}
+
+interface WebhookChange {
+    value?: WebhookValue;
+    [key: string]: any;
+}
+
+interface WebhookEntry {
+    changes?: WebhookChange[];
+    [key: string]: any;
 }
 
 interface WebhookBody {
-    entry?: Array<{ changes?: Array<{ value?: WebhookValue }> }>;
+    entry?: WebhookEntry[];
+    [key: string]: any;
 }
 
 router.post("/", async (req: Request<unknown, unknown, WebhookBody>, res: Response) => {
     try {
+        // 1) Signature verification (if APP_SECRET configured)
         const sig = (req.get("x-hub-signature-256") || "").trim();
         if (APP_SECRET) {
-            const expected = "sha256=" + crypto.createHmac("sha256", APP_SECRET).update(req.rawBody ?? Buffer.from("")).digest("hex");
+            const raw = req.rawBody ?? Buffer.from("");
+            const expected = "sha256=" + crypto.createHmac("sha256", APP_SECRET).update(raw).digest("hex");
             const sigBuf = Buffer.from(sig);
             const expBuf = Buffer.from(expected);
             if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
@@ -55,53 +72,114 @@ router.post("/", async (req: Request<unknown, unknown, WebhookBody>, res: Respon
             console.warn("APP_SECRET not set; skipping signature verification (POC)");
         }
 
-        /* for now we are taking only 1st element, bt ideally we should check all elements with looping */
-        const entry = req.body.entry?.[0];
-        const change = entry?.changes?.[0];
-        const value = change?.value;
-        const phoneNumberId = value?.metadata?.phone_number_id;
-
-        if (!phoneNumberId) return res.sendStatus(200);
-
-        const tenant = await getTenantByPhoneNumberId(phoneNumberId);
-        if (!tenant) {
-            console.warn("No tenant for phone number id:", phoneNumberId);
+        // 2) Validate body
+        const body = req.body as WebhookBody;
+        if (!body?.entry || !Array.isArray(body.entry) || body.entry.length === 0) {
+            // nothing to do
             return res.sendStatus(200);
         }
 
-        const messages = value?.messages ?? [];
-        for (const m of messages) {
-            const from = m.from;
-            const text = m.text?.body ?? null;
+        // 3) Iterate all entries and changes (supports multi-tenant + multi-user in one payload)
+        for (const entry of body.entry) {
+            if (!entry?.changes || !Array.isArray(entry.changes)) continue;
 
-            await Customer.findOneAndUpdate(
-                { tenantId: tenant._id, waId: from },
-                { $set: { lastSeenAt: new Date() } },
-                { upsert: true, new: true }
-            ).exec();
+            for (const change of entry.changes) {
+                const value = change?.value as WebhookValue | undefined;
+                if (!value) continue;
 
-            await Message.create({
-                tenantId: tenant._id,
-                direction: "IN",
-                body: text,
-                type: m.type ?? "text",
-                waMessageId: m.id,
-                status: "received"
-            });
-        }
+                const phoneNumberId = value?.metadata?.phone_number_id;
+                if (!phoneNumberId) {
+                    console.warn("webhook change without phone_number_id metadata, skipping");
+                    continue;
+                }
 
-        const statuses = value?.statuses ?? [];
-        for (const s of statuses) {
-            await Message.updateMany({ tenantId: tenant._id, waMessageId: s.id }, { $set: { status: s.status } }).exec();
-        }
+                // Resolve tenant by phone_number_id
+                let tenant;
+                try {
+                    tenant = await getTenantByPhoneNumberId(phoneNumberId);
+                } catch (err) {
+                    console.error("error fetching tenant for phoneNumberId", phoneNumberId, err);
+                    // Skip this change (do not block other changes)
+                    continue;
+                }
 
+                if (!tenant) {
+                    console.warn("No tenant for phone number id:", phoneNumberId);
+                    // Optionally: persist raw event to 'unmapped' collection for later manual mapping
+                    continue;
+                }
+
+                // Process messages array (could be multiple messages from multiple users)
+                const messages = value?.messages ?? [];
+                if (Array.isArray(messages) && messages.length > 0) {
+                    // process messages in parallel per-change but catch errors per-item
+                    await Promise.all(messages.map(async (m: WebhookMessage) => {
+                        try {
+                            const from = m.from;
+                            const text = m.text?.body ?? null;
+
+                            // Upsert customer (atomic single-doc upsert)
+                            await Customer.findOneAndUpdate(
+                                { tenantId: tenant._id, waId: from },
+                                { $set: { lastSeenAt: new Date() } },
+                                { upsert: true, new: true }
+                            ).exec();
+
+                            // Deduplicate inbound by waMessageId (avoid double-insert on retries)
+                            if (m.id) {
+                                const exists = await Message.findOne({ tenantId: tenant._id, waMessageId: m.id }).exec();
+                                if (exists) {
+                                    // Optionally update status/timestamps if needed
+                                    // console.info("Inbound message already exists, skipping:", m.id);
+                                    return;
+                                }
+                            }
+
+                            // Create inbound message record
+                            await Message.create({
+                                tenantId: tenant._id,
+                                direction: "IN",
+                                body: text,
+                                type: m.type ?? "text",
+                                waMessageId: m.id,
+                                status: "received",
+                                createdAt: new Date()
+                            });
+                        } catch (err) {
+                            // log per-message errors but don't fail entire webhook processing
+                            console.error("Error processing inbound message", { phoneNumberId, messageId: m?.id, err });
+                        }
+                    }));
+                }
+
+                // Process statuses (delivery/read receipts)
+                const statuses = value?.statuses ?? [];
+                if (Array.isArray(statuses) && statuses.length > 0) {
+                    for (const s of statuses) {
+                        try {
+                            if (!s?.id) continue;
+                            // Update any message(s) with this waMessageId for this tenant
+                            await Message.updateMany(
+                                { tenantId: tenant._id, waMessageId: s.id },
+                                { $set: { status: s.status ?? "unknown" } }
+                            ).exec();
+                        } catch (err) {
+                            console.error("Error updating status for waMessageId", s?.id, err);
+                        }
+                    }
+                }
+
+                // end processing this change
+            } // end for change
+        } // end for entry
+
+        // 4) Return success quickly
         return res.sendStatus(200);
     } catch (err) {
         console.error("webhook error", err);
         return res.sendStatus(500);
     }
 });
-
 
 
 
