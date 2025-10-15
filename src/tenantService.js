@@ -1,10 +1,9 @@
-// tenant helpers: register tenant, find tenant by phoneNumberId or id, get decrypted token
+// Tenant helper functions
 import { Tenant } from "./models.js";
 import { encrypt, decrypt } from "./utils/crypto.js";
 
 /**
- * registerTenant: simple onboarding for PoC.
- * In production use embedded signup flow; don't accept raw tokens manually.
+ * registerTenant - PoC onboarding (accepts token manually for now)
  */
 export async function registerTenant({ name, phoneNumberId, accessToken, wabaId }) {
     const accessTokenEnc = encrypt(accessToken);
@@ -15,7 +14,7 @@ export async function registerTenant({ name, phoneNumberId, accessToken, wabaId 
         accessTokenEnc,
     });
     await t.save();
-    return t;
+    return t.toObject();
 }
 
 export async function getTenantByPhoneNumberId(pnid) {

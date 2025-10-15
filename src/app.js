@@ -1,3 +1,4 @@
+// express app wiring
 import express from "express";
 import dotenv from "dotenv";
 import { rawBodyMiddleware } from "./middlewares/rawBody.js";
@@ -23,16 +24,18 @@ app.post("/tenants/register", async (req, res) => {
         return res.json({ ok: true, tenant: { id: t._id, name: t.name, phoneNumberId: t.phoneNumberId } });
     } catch (err) {
         console.error("register error", err);
-        // duplicate phoneNumberId handling
         if (err.code === 11000) return res.status(409).json({ error: "phoneNumberId already registered" });
         return res.status(500).json({ error: "internal" });
     }
 });
 
-// mount webhook
+// webhook mount
 app.use("/whatsapp/webhook", webhookRouter);
 
 // outbound send
 app.post("/tenants/:tenantId/send", enqueueSend);
+
+// health
+app.get("/health", (req, res) => res.json({ ok: true }));
 
 export default app;

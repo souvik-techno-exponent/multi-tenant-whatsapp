@@ -1,4 +1,4 @@
-// Webhook router: verification + routing by metadata.phone_number_id
+// Webhook router with verification and tenant routing
 import express from "express";
 import crypto from "crypto";
 import { getTenantByPhoneNumberId } from "./tenantService.js";
@@ -22,7 +22,7 @@ router.get("/", (req, res) => {
 // POST events
 router.post("/", async (req, res) => {
     try {
-        // Signature verification (if APP_SECRET configured)
+        // signature verification
         const sig = req.get("x-hub-signature-256") || "";
         if (APP_SECRET) {
             const expected = "sha256=" + crypto.createHmac("sha256", APP_SECRET).update(req.rawBody).digest("hex");
@@ -56,7 +56,7 @@ router.post("/", async (req, res) => {
             const from = m.from;
             const text = m.text?.body ?? null;
 
-            // Upsert customer (tenant-scoped)
+            // Upsert customer for tenant
             await Customer.findOneAndUpdate({ tenantId: tenant._id, waId: from }, { $set: { lastSeenAt: new Date() } }, { upsert: true, new: true });
 
             // Create message record
@@ -69,13 +69,12 @@ router.post("/", async (req, res) => {
                 status: "received",
             });
 
-            // (POC) Optionally: trigger automated reply or business workflow here
+            // Optionally trigger reply/workflow here (left as exercise)
         }
 
-        // statuses (delivery receipts)
+        // Update statuses (delivery receipts)
         const statuses = value?.statuses || [];
         for (const s of statuses) {
-            // update message status by waMessageId
             await Message.updateMany({ tenantId: tenant._id, waMessageId: s.id }, { $set: { status: s.status } });
         }
 

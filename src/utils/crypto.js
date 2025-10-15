@@ -1,4 +1,4 @@
-// simple AES-256-GCM encrypt/decrypt for tokens at-rest (POC).
+// AES-256-GCM encrypt/decrypt for token at-rest (POC).
 import crypto from "crypto";
 
 const ALGO = "aes-256-gcm";

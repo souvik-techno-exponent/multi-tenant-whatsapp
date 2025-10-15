@@ -1,10 +1,9 @@
 // Mongoose models for Tenant, Customer, Conversation, Message
 import mongoose from "mongoose";
-
 const { Schema } = mongoose;
 
 /**
- * Tenant model stores per-tenant config (phoneNumberId, encrypted token).
+ * Tenant schema - per-tenant WhatsApp config
  */
 const tenantSchema = new Schema({
     name: { type: String, required: true },
@@ -15,28 +14,25 @@ const tenantSchema = new Schema({
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
 });
-
 tenantSchema.pre("save", function (next) {
     this.updatedAt = Date.now();
     next();
 });
 
 /**
- * Customer model stores customer info scoped to tenant.
+ * Customer - tenant scoped
  */
 const customerSchema = new Schema({
     tenantId: { type: Schema.Types.ObjectId, required: true, index: true },
-    waId: { type: String, required: true }, // E.164
+    waId: { type: String, required: true },
     name: { type: String },
     lastSeenAt: { type: Date },
     createdAt: { type: Date, default: Date.now },
 });
-
-// ensure tenantId + waId lookup is fast
 customerSchema.index({ tenantId: 1, waId: 1 }, { unique: true });
 
 /**
- * Conversation model (light)
+ * Conversation (light)
  */
 const conversationSchema = new Schema({
     tenantId: { type: Schema.Types.ObjectId, required: true, index: true },
@@ -48,8 +44,7 @@ const conversationSchema = new Schema({
 conversationSchema.index({ tenantId: 1, customerWaId: 1 });
 
 /**
- * Message model
- * idempotency: unique per-tenant if idempotencyKey present
+ * Message - idempotency rule per tenant
  */
 const messageSchema = new Schema({
     tenantId: { type: Schema.Types.ObjectId, required: true, index: true },
@@ -62,8 +57,6 @@ const messageSchema = new Schema({
     status: { type: String }, // queued|sent|delivered|read|failed
     createdAt: { type: Date, default: Date.now },
 });
-
-// Unique idempotency per tenant (only when idempotencyKey exists)
 messageSchema.index({ tenantId: 1, idempotencyKey: 1 }, { unique: true, partialFilterExpression: { idempotencyKey: { $exists: true } } });
 
 export const Tenant = mongoose.model("Tenant", tenantSchema);

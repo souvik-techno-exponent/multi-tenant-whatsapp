@@ -1,10 +1,12 @@
 {
-    "name": "poc-whatsapp-multitenant-mongo",
+    "name": "poc-whatsapp-multitenant-mongo-dev",
     "version": "1.0.0",
     "type": "module",
     "scripts": {
+        "dev": "nodemon --config ./nodemon.json",
         "start": "node src/index.js",
-        "dev": "nodemon --watch src --exec node src/index.js"
+        "worker:dev": "nodemon --config ./nodemon.json --exec node src/workerProcess.js",
+        "lint": "echo \"add linter\""
     },
     "dependencies": {
         "axios": "^1.5.0",
@@ -12,7 +14,7 @@
         "dotenv": "^16.1.0",
         "express": "^4.18.2",
         "ioredis": "^5.3.2",
-        "mongoose": "^7.0.0",
+        "mongoose": "^7.5.0",
         "uuid": "^9.0.0"
     },
     "devDependencies": {

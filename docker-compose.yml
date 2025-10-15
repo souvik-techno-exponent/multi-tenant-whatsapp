@@ -1,7 +1,41 @@
 version: "3.8"
 services:
+    app:
+        build:
+            context: .
+            dockerfile: Dockerfile.dev
+        container_name: poc_app
+        restart: unless-stopped
+        env_file:
+            - .env
+        ports:
+            - "3000:3000"
+        volumes:
+            - ./:/usr/src/app:delegated
+            - /usr/src/app/node_modules
+        depends_on:
+            - mongo
+            - redis
+
+    worker:
+        build:
+            context: .
+            dockerfile: Dockerfile.dev
+        container_name: poc_worker
+        restart: unless-stopped
+        env_file:
+            - .env
+        command: ["npm", "run", "worker:dev"]
+        volumes:
+            - ./:/usr/src/app:delegated
+            - /usr/src/app/node_modules
+        depends_on:
+            - mongo
+            - redis
+
     mongo:
         image: mongo:6
+        container_name: poc_mongo
         ports:
             - "27017:27017"
         volumes:
@@ -9,9 +43,25 @@ services:
 
     redis:
         image: redis:7
+        container_name: poc_redis
         ports:
             - "6379:6379"
         command: ["redis-server", "--appendonly", "yes"]
+        volumes:
+            - redisdata:/data
+
+    mongo-express:
+        image: mongo-express:1.0.0
+        container_name: poc_mongo_express
+        environment:
+            ME_CONFIG_MONGODB_SERVER: mongo
+            ME_CONFIG_BASICAUTH_USERNAME: admin
+            ME_CONFIG_BASICAUTH_PASSWORD: pass
+        ports:
+            - "8081:8081"
+        depends_on:
+            - mongo
 
 volumes:
     mongodata:
+    redisdata:

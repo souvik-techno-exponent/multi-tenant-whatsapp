@@ -1,4 +1,4 @@
-// enqueue outbound message per-tenant (create DB message record + push BullMQ job)
+// enqueue outbound message per-tenant (create DB message + push BullMQ job)
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
 import { v4 as uuidv4 } from "uuid";
@@ -27,13 +27,13 @@ export async function enqueueSend(req, res) {
 
         const key = idempotency_key || uuidv4();
 
-        // Pre-check idempotency: if message exists with same key for tenant, return it
+        // Pre-check idempotency
         const existing = await Message.findOne({ tenantId: tenant._id, idempotencyKey: key }).lean();
         if (existing) {
             return res.status(200).json({ ok: true, idempotency_key: key, messageId: existing._id, note: "duplicate suppressed" });
         }
 
-        // Create message record as queued
+        // Create DB message record as queued
         const msgDoc = await Message.create({
             tenantId: tenant._id,
             direction: "OUT",
@@ -43,7 +43,7 @@ export async function enqueueSend(req, res) {
             status: "queued",
         });
 
-        // Enqueue job
+        // Enqueue job with retry/backoff
         await sendQueue.add(
             "send",
             {
@@ -61,7 +61,7 @@ export async function enqueueSend(req, res) {
 
         return res.json({ ok: true, idempotency_key: key, messageId: msgDoc._id });
     } catch (err) {
-        // If duplicate key error occurs due to race, return conflict suppressed
+        // handle duplicate race condition
         if (err.code === 11000) {
             return res.status(200).json({ ok: true, note: "duplicate suppressed (race)" });
         }
