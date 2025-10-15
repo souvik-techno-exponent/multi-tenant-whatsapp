@@ -25,8 +25,8 @@ const connection = new IORedis({
 // --- Interop-safe access to classes ---
 // cast to any to avoid TypeScript/runtime interop issues
 const _Bull: any = BullMQ;
-const QueueScheduler = _Bull.QueueScheduler;
-const WorkerCtor = _Bull.Worker;
+let QueueScheduler = _Bull.QueueScheduler;
+let WorkerCtor = _Bull.Worker;
 
 if (!QueueScheduler) {
     // As a fallback try named import (edge cases)
