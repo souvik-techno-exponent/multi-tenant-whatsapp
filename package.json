@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "type": "module",
     "scripts": {
-        "dev": "nodemon src/index.js",
+        "dev": "nodemon --config ./nodemon.json",
         "start": "node src/index.js",
         "worker:dev": "nodemon --config ./nodemon.json --exec node src/workerProcess.js",
         "lint": "echo \"add linter\""
