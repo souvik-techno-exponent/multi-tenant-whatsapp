@@ -1,20 +1,18 @@
-# development Dockerfile
+# Dockerfile.dev
 FROM node:20
 
-# Create app directory
 WORKDIR /usr/src/app
 
-# Copy dependency manifests first for efficient rebuilds
-COPY package.json package-lock.json* ./ 
+# copy package manifests first for caching
+COPY package.json package-lock.json* ./
 
-# Install deps
-RUN npm ci --silent
+# install dependencies (use npm i as requested)
+# note: using --silent to reduce noisy logs in docker build output
+RUN npm i --silent
 
-# Copy the rest (mounted in compose for live reload)
+# copy rest of the sources (mounted in docker-compose for live reload)
 COPY . .
 
-# Expose app port
 EXPOSE 3000
 
-# Default command is dev start (override in compose for worker)
 CMD ["npm", "run", "dev"]
