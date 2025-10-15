@@ -1,15 +1,21 @@
 // src/worker.ts
-// Robust worker using bullmq with ESM/CJS interop safe pattern.
-// We cast bullmq namespace to any to avoid build-time type mismatch issues.
+// Worker process for processing send jobs (BullMQ).
+// Approach: pass plain connection options object to BullMQ (maxRetriesPerRequest: null).
+// This avoids bullmq's runtime check and is robust across environments.
+//
+// Notes:
+// - We use a namespace import and a small require-fallback to be robust with ESM/CJS interop.
+// - We deliberately avoid creating an ioredis client here; bullmq will create its own client
+//   from the options we provide (recommended for this use-case).
 
 import * as BullMQ from "bullmq";
 import type { Job } from "bullmq";
-import IORedis from "ioredis";
 import axios from "axios";
 import { Message, Tenant } from "./models";
 import { getAccessToken } from "./tenantService";
 
-type SendJobData = {
+// Job payload shape
+export type SendJobData = {
     tenantId: string;
     messageId: string;
     to: string;
@@ -17,35 +23,51 @@ type SendJobData = {
     idempotencyKey?: string;
 };
 
-const connection = new IORedis({
-    host: process.env.REDIS_HOST || "127.0.0.1",
-    port: Number(process.env.REDIS_PORT ?? 6379)
-});
-
-// --- Interop-safe access to classes ---
-// cast to any to avoid TypeScript/runtime interop issues
+// Interop-safe access to QueueScheduler and Worker constructors.
+// Cast namespace to any to silence TS complaining about missing props,
+// and provide a require fallback for certain runtime setups.
 const _Bull: any = BullMQ;
-let QueueScheduler = _Bull.QueueScheduler;
+let QueueSchedulerCtor = _Bull.QueueScheduler;
 let WorkerCtor = _Bull.Worker;
 
-if (!QueueScheduler) {
-    // As a fallback try named import (edge cases)
+if (!QueueSchedulerCtor || !WorkerCtor) {
+    // fallback to require (handles some CJS/ESM environments)
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const required = require("bullmq");
-    // @ts-ignore
-    QueueScheduler = required.QueueScheduler;
-    // @ts-ignore
-    WorkerCtor = required.Worker;
+    QueueSchedulerCtor = QueueSchedulerCtor ?? required.QueueScheduler;
+    WorkerCtor = WorkerCtor ?? required.Worker;
 }
 
-if (!QueueScheduler) {
-    console.error("QueueScheduler not found on bullmq import. Please check bullmq version.");
-    // We won't throw here; worker will fail later when started if necessary
+if (!QueueSchedulerCtor || !WorkerCtor) {
+    console.error("Could not locate QueueScheduler or Worker constructors from bullmq. Check 'bullmq' installation/version.");
+    // we do not throw here — startWorker will check and abort if necessary
+}
+
+// --- Connection options object (Option A) ---
+// IMPORTANT: bullmq requires maxRetriesPerRequest === null
+const connectionOptions = {
+    host: process.env.REDIS_HOST || "127.0.0.1",
+    port: Number(process.env.REDIS_PORT ?? 6379),
+    // when using Redis URL, prefer `connection: { url: process.env.REDIS_URL, maxRetriesPerRequest: null }`
+    // but leaving host/port is fine for dev docker compose setups
+    maxRetriesPerRequest: null as null
+};
+
+// instantiate QueueScheduler (so delayed jobs, retries, etc. work)
+if (QueueSchedulerCtor) {
+    try {
+        // QueueScheduler accepts connection options object
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const qs = new QueueSchedulerCtor("whatsapp-send-queue", { connection: connectionOptions });
+        // We don't need to hold reference to qs for this PoC
+    } catch (err) {
+        console.error("Failed to create QueueScheduler:", (err as Error).message);
+    }
 } else {
-    // instantiate scheduler so delayed/retries etc work
-    new QueueScheduler("whatsapp-send-queue", { connection });
+    console.warn("QueueSchedulerCtor not available — scheduler not started.");
 }
 
+// Worker starter
 export function startWorker(): void {
     if (!WorkerCtor) {
         console.error("Worker constructor not found on bullmq import. Aborting worker start.");
@@ -54,17 +76,23 @@ export function startWorker(): void {
 
     const worker = new WorkerCtor(
         "whatsapp-send-queue",
+        // processor
         async (job: Job<SendJobData>) => {
             const { tenantId, messageId, to, text } = job.data;
 
+            // Load tenant
             const tenant = await Tenant.findById(tenantId).exec();
             if (!tenant) throw new Error("tenant not found");
 
+            // Decrypt token
             const token = getAccessToken(tenant);
             if (!token) throw new Error("tenant missing access token");
 
+            // Load message
             const msg = await Message.findById(messageId).exec();
             if (!msg) throw new Error("message not found");
+
+            // Idempotency: skip if already sent
             if (msg.status === "sent") {
                 return { ok: true, note: "already-sent" };
             }
@@ -74,7 +102,7 @@ export function startWorker(): void {
             const url = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
 
             try {
-                // dev-mode simulation when token starts with "mock_"
+                // Dev-mode: simulate if token starts with "mock_"
                 if (token.startsWith("mock_")) {
                     msg.status = "sent";
                     msg.waMessageId = `mock-${Date.now()}`;
@@ -105,14 +133,24 @@ export function startWorker(): void {
                 console.error("send job failed", maybeResp ?? (err as Error).message);
                 msg.status = "failed";
                 await msg.save();
-                throw err; // let BullMQ retry
+                // rethrow so BullMQ can handle retries/backoff
+                throw err;
             }
         },
-        { connection }
+        // options
+        {
+            connection: connectionOptions,
+            // You can also tune concurrency here, e.g. concurrency: 5
+            // concurrency: 5
+        }
     );
 
     worker.on("failed", (job: Job, err: Error) => {
         console.error("Job failed", job.id, err?.message);
+    });
+
+    worker.on("completed", (job: Job) => {
+        console.log("Job completed", job.id);
     });
 
     console.log("Worker started");
