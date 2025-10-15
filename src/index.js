@@ -7,6 +7,7 @@ import { connectWithRetry } from "./db.js";
 const PORT = process.env.PORT || 3000;
 
 async function start() {
+    console.log("working fine");
     await connectWithRetry();
     app.listen(PORT, () => {
         console.log(`Server listening on port ${PORT}`);

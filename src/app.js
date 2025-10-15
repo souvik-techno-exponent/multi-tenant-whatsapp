@@ -23,8 +23,21 @@ app.post("/tenants/register", async (req, res) => {
         const t = await registerTenant({ name, phoneNumberId, accessToken, wabaId });
         return res.json({ ok: true, tenant: { id: t._id, name: t.name, phoneNumberId: t.phoneNumberId } });
     } catch (err) {
+        // log full error for server logs
         console.error("register error", err);
-        if (err.code === 11000) return res.status(409).json({ error: "phoneNumberId already registered" });
+
+        // duplicate key (unique phoneNumberId) -> handled explicitly
+        if (err && err.code === 11000) {
+            return res.status(409).json({ error: "phoneNumberId already registered" });
+        }
+
+        // In development return error message + stack to help debugging.
+        // In production do not expose stack trace.
+        if (process.env.NODE_ENV === "development") {
+            const safeMessage = err && err.message ? String(err.message) : "unknown error";
+            return res.status(500).json({ error: safeMessage, stack: err.stack });
+        }
+
         return res.status(500).json({ error: "internal" });
     }
 });
