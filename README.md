@@ -1,79 +1,134 @@
-# WhatsApp Multi-Tenant Backend (Node.js + MongoDB + Docker)
+# WhatsApp Multi‑Tenant Backend (Node.js + MongoDB + Docker)
 
 A development-friendly proof of concept for a **multi-tenant WhatsApp SaaS backend**.  
 Each tenant connects their own WhatsApp number (via Cloud API), and messages from customers are handled automatically.
 
-This version includes:
+**This merged, up‑to‑date README** consolidates the previous structured notes and the latest README. Stale/duplicate sections have been removed.
 
--   MongoDB + Redis (BullMQ) persistence.
--   Auto-reply: each inbound message triggers a polite reply —
+---
+
+## Summary
+
+Multi-tenant WhatsApp PoC using:
+
+-   Node.js + Express
+-   MongoDB (Mongoose)
+-   Redis + BullMQ (job queue)
+-   Dev Docker setup with `nodemon` for live reload
+
+Features:
+
+-   Tenant onboarding (PoC manual token)
+-   Shared webhook that routes inbound events to correct tenant via `metadata.phone_number_id`
+-   Outbound send queue with retries & idempotency
+-   Auto-reply: every inbound message triggers:
     ```
     thanks for reaching us
     - team <tenant.name>
     ```
--   Live reload (nodemon) inside Docker.
+-   Dev-friendly Docker compose (app + worker + mongo + redis + mongo-express)
 
 ---
 
-## 🏗️ Local Development Setup
+## Prerequisites
 
-### 1. Prerequisites
+-   Docker & Docker Compose
+-   Node.js (optional if running inside Docker)
+-   npm (optional)
+-   Copy `.env.example` → `.env` and fill values.
 
--   Docker + Docker Compose
--   Node.js ≥ 18 (optional, only for local testing)
--   Internet access (if you use real WhatsApp tokens)
-
-### 2. Clone & configure
-
-```bash
-git clone <repo>
-cd <repo>
-cp .env.example .env
-```
-
-Edit `.env` and fill at least:
+**Env variables (examples)**
 
 ```env
-MASTER_KEY=32_byte_random_string
-APP_SECRET=your_meta_app_secret
+APP_SECRET=your_meta_app_secret_here
 VERIFY_TOKEN=local_verify_token_for_meta
+MASTER_KEY=32_byte_random_string_here   # >=32 chars for AES-256-GCM in PoC
 MONGO_URI=mongodb://mongo:27017/pocdb
 REDIS_HOST=redis
+REDIS_PORT=6379
+WHATSAPP_API_VERSION=v20.0
+PORT=3000
 ```
 
-### 3. Run containers
+> Security note: `MASTER_KEY` encryption in this PoC is for convenience only. In production use a KMS / Secrets Manager and rotate tokens.
+
+---
+
+## Quick start (development)
+
+1. Copy `.env.example` to `.env` and fill values.
+2. Build and start:
 
 ```bash
 docker-compose up --build
 ```
 
-Services:
-| Service | Port | Description |
-|----------|------|-------------|
-| `app` | 3000 | Express API |
-| `worker` | – | BullMQ worker |
-| `mongo` | 27017 | MongoDB |
-| `mongo-express` | 8081 | Web UI (admin/pass) |
-| `redis` | 6379 | Job queue |
+3. App URL: `http://localhost:3000`  
+   Mongo-express UI: `http://localhost:8081` (user: `admin`, pass: `pass`)
+
+Dev workflow:
+
+-   Files are mounted into the container; `nodemon` watches `src/` and restarts the server on change.
+-   If you add new dependencies, rebuild images:
+    ```bash
+    docker-compose build app worker
+    ```
+-   Tail logs:
+    ```bash
+    docker-compose logs -f app
+    docker-compose logs -f worker
+    ```
 
 ---
 
-## ⚙️ Endpoints
+## Project layout (key files)
 
-### 1. Health
+```
+docker-compose.yml
+Dockerfile.dev
+.env.example
+nodemon.json
+package.json
+src/
+  index.js          # server entrypoint
+  app.js            # express wiring & routes
+  db.js             # mongoose connect (with retry)
+  models.js         # Mongoose schemas (Tenant, Customer, Message, Conversation)
+  tenantService.js  # tenant helpers + encrypt/decrypt token
+  sendController.js # enqueue outbound sends
+  webhook.js        # webhook verify + routing by metadata.phone_number_id
+  worker.js         # BullMQ worker logic (send jobs)
+  workerProcess.js  # worker container entrypoint
+  utils/crypto.js   # AES-256-GCM encrypt/decrypt (POC)
+  middlewares/rawBody.js # capture raw body for signature verification
+```
 
-```http
+---
+
+## API reference (for Postman / curl)
+
+> Base URL: `http://localhost:3000`
+
+### 1) Health
+
+```
 GET /health
 ```
 
-Check service status.
+Response:
 
-### 2. Tenant Onboarding
+```json
+{ "ok": true }
+```
 
-```http
+### 2) Register tenant (PoC)
+
+```
 POST /tenants/register
 Content-Type: application/json
 ```
+
+Body:
 
 ```json
 {
@@ -83,53 +138,56 @@ Content-Type: application/json
 }
 ```
 
-Registers a tenant.  
-If token starts with `mock_`, messages are **simulated** (no Graph API call).
+Notes: In production use Embedded Signup. `mock_` tokens simulate sends.
 
-### 3. Send Message (outbound)
+Curl:
 
-```http
+```bash
+curl -X POST http://localhost:3000/tenants/register   -H "Content-Type: application/json"   -d '{"name":"Tenant A","phoneNumberId":"111111111111111","accessToken":"mock_token_tenant_A"}'
+```
+
+### 3) Send message (outbound)
+
+```
 POST /tenants/:tenantId/send
 Content-Type: application/json
 ```
 
-```json
-{
-    "to": "+919012345678",
-    "text": "Hello there",
-    "idempotency_key": "order-1234"
-}
-```
-
-Queues an outbound message for the worker.  
-Response:
+Body:
 
 ```json
 {
-    "ok": true,
-    "idempotency_key": "order-1234",
-    "messageId": "6521a1..."
+  "to": "+919012345678",
+  "text": "Hello there",
+  "idempotency_key": "order-1234"  # optional but recommended
 }
 ```
 
-### 4. WhatsApp Webhook
+Curl:
 
-#### Verify (GET)
-
-```http
-GET /whatsapp/webhook?hub.mode=subscribe&hub.verify_token=<VERIFY_TOKEN>&hub.challenge=CHALLENGE
+```bash
+curl -X POST http://localhost:3000/tenants/<TENANT_ID>/send  -H "Content-Type: application/json"  -d '{"to":"+919012345678","text":"Hello","idempotency_key":"order-1234"}'
 ```
 
-Responds with the challenge string if token matches.
+Creates DB message (status=queued) and enqueues a job.
 
-#### Receive (POST)
+### 4) Webhook verification (Meta)
 
-```http
+```
+GET /whatsapp/webhook?hub.mode=subscribe&hub.verify_token=<VERIFY_TOKEN>&hub.challenge=<challenge>
+```
+
+Responds with challenge if token matches.
+
+### 5) Webhook POST (incoming events)
+
+```
 POST /whatsapp/webhook
 Content-Type: application/json
+Headers: X-Hub-Signature-256: sha256=<hex>  # required if APP_SECRET set
 ```
 
-Example payload (incoming message):
+Example body:
 
 ```json
 {
@@ -148,96 +206,100 @@ Example payload (incoming message):
 }
 ```
 
-**Effect**
+Effect:
 
--   Saves inbound message → `messages` collection (`direction: "IN"`).
--   Creates/updates customer record.
--   Automatically enqueues an outbound reply:
-    ```
-    thanks for reaching us
-    - team Tenant A
-    ```
-
----
-
-## 🔄 Auto-Reply Flow
-
-1. **Customer** sends a message → WhatsApp → webhook.
-2. **Webhook** identifies tenant by `phone_number_id`.
-3. Saves inbound message and **creates queued outbound** message with body:
+-   Persists inbound `Message` with `direction: IN`.
+-   Upserts `Customer`.
+-   **Auto-reply**: enqueues an outbound message with body:
     ```
     thanks for reaching us
     - team <tenant.name>
     ```
-4. **Worker** picks up queue, decrypts tenant token, and sends via WhatsApp Cloud API (or simulates if token starts with `mock_`).
+    The auto-reply uses idempotency key `auto-reply:<inbound-wa-message-id>`.
 
-All outbound messages use `idempotencyKey = auto-reply:<inbound-wa-message-id>` to prevent duplicates.
+How to compute signature (if APP_SECRET set):
 
----
-
-## 🗃️ Data Model (Mongo)
-
-| Collection      | Purpose                                   |
-| --------------- | ----------------------------------------- |
-| `tenants`       | WhatsApp credential & metadata per tenant |
-| `customers`     | End users by tenant                       |
-| `messages`      | Inbound/outbound messages + statuses      |
-| `conversations` | (Optional) conversation sessions          |
+-   Use exact raw JSON body and compute HMAC-SHA256 with `APP_SECRET` and prefix with `sha256=`. Examples with `openssl` or Node.js are in the earlier docs.
 
 ---
 
-## 🔍 Monitoring
+## Data model (conceptual)
 
--   App logs
+**Tenant**
+
+-   `_id`, `name`, `phoneNumberId` (unique), `wabaId`, `accessTokenEnc`, `status`, timestamps
+
+**Customer**
+
+-   `tenantId`, `waId` (E.164), `name`, `lastSeenAt`
+
+**Message**
+
+-   `tenantId`, `conversationId?`, `direction` (`IN|OUT`), `waMessageId`, `body`, `idempotencyKey`, `status` (`queued|sent|delivered|read|failed`), timestamps
+
+---
+
+## Reliability, queue & idempotency
+
+-   Queue: BullMQ with queue name `whatsapp-send-queue`. Jobs: attempts=5, exponential backoff.
+-   Idempotency: Mongo partial unique index on `(tenantId, idempotencyKey)` prevents duplicate sends per tenant. Pre-checks in controller avoid duplicates. Worker checks message.status before sending.
+-   Mock tokens: tokens starting with `mock_` are simulated in worker (no external API call) — useful for dev.
+
+---
+
+## Security & secrets
+
+-   PoC: AES-256-GCM encryption using `MASTER_KEY` from `.env`. Not production-grade.
+-   Prod: Use Cloud KMS / Secrets Manager, rotate secrets, apply least privilege.
+-   Webhook signature: verify `X-Hub-Signature-256` as `sha256=HMAC(APP_SECRET, rawBody)`.
+
+---
+
+## Troubleshooting & monitoring
+
+-   Logs:
     ```bash
     docker-compose logs -f app
-    ```
--   Worker logs
-    ```bash
     docker-compose logs -f worker
+    docker-compose logs -f mongo
+    docker-compose logs -f redis
     ```
--   Mongo-Express UI  
-    <http://localhost:8081> (user: `admin`, pass: `pass`)
+-   Mongo UI: `http://localhost:8081` (admin / pass)
+-   If nodemon restarts too often, check for file-change loops or volume mounts.
+-   If webhook 401: ensure signature computed on exact raw body.
 
 ---
 
-## 🧪 Testing Quickly
+## Production considerations
 
-1. Register a tenant:
-    ```bash
-    curl -X POST http://localhost:3000/tenants/register      -H "Content-Type: application/json"      -d '{"name":"Tenant A","phoneNumberId":"111111111111111","accessToken":"mock_token_tenant_A"}'
-    ```
-2. Simulate incoming message:
-    ```bash
-    curl -X POST http://localhost:3000/whatsapp/webhook      -H "Content-Type: application/json"      -d '{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"111111111111111"},"messages":[{"from":"+919111111111","id":"wamid.123","type":"text","text":{"body":"hi"}}]}}]}]}'
-    ```
-3. Observe worker logs — it will enqueue and “send” auto-reply.
+-   Run workers in separate processes/hosts; autoscale independently.
+-   Implement DLQ (dead-letter queue) for permanently failing jobs.
+-   Add observability: metrics (Prometheus), centralized logs, tracing.
+-   Enforce per-tenant rate limits; monitor noisy tenants.
+-   Use Meta Embedded Signup for tenant onboarding (don't accept raw tokens).
 
 ---
 
-## 🧰 Dev Tips
+## Next steps (optional add-ons)
 
--   **Live reload:** nodemon restarts inside container on file changes.
--   **Reset DB:**
-    ```bash
-    docker-compose down -v && docker-compose up --build
-    ```
--   **Shell into container:**
-    ```bash
-    docker exec -it poc_app /bin/sh
-    ```
+-   Add Embedded Signup / OAuth server flow.
+-   Integrate KMS (AWS/GCP) for token encryption at rest.
+-   Add production Dockerfile and Kubernetes manifests / Helm chart.
+-   Add tests (Jest + supertest) and CI pipeline.
+-   Add Postman collection (I can generate it).
 
 ---
 
-## 🧩 Future Improvements
+## Contact / Help
 
--   Use Meta’s **Embedded Signup** flow for real tenant OAuth onboarding.
--   Per-tenant webhook signature verification (multi-APP_SECRET support).
--   Retry/DLQ + metrics dashboard.
--   UI frontend for tenants.
+If you want, I can:
+
+-   generate a ZIP of the project,
+-   add Embedded Signup code,
+-   integrate KMS example,
+-   produce production manifests,
+-   generate a Postman collection for quick import.
+
+Reply with which next step you want.
 
 ---
-
-## 🧾 License
-
-MIT – for educational and prototype use.
