@@ -1,0 +1,96 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment files (keep .env.example in repo, ignore actual secret envs)
+.env
+.env.*.local
+.env.local
+.env.test
+.env.production
+.env.*.secret
+
+# Logs
+logs
+*.log
+logs/**/*.log
+pids
+*.pid
+*.seed
+
+# Runtime data
+tmp/
+temp/
+.cache/
+*.tmp
+
+# Build outputs
+dist/
+build/
+out/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Coverage & test reports
+coverage/
+.nyc_output/
+coverage/**/*.lcov
+
+# npm pack
+*.tgz
+
+# Lock files (optionally include; usually you commit lockfile — uncomment to ignore)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# Docker related (ignore local docker-compose overrides / dev data)
+docker-compose.override.yml
+docker-compose.*.local.yml
+**/docker-compose.override.yml
+
+# Database / data folders (local dev volumes, ensure you don't commit DB files)
+mongodata/
+mongo-data/
+data/
+data-db/
+dump/
+restore/
+
+# Redis persistence (if you run redis locally and create a dir)
+redis/
+redis-data/
+
+# Sensitive or local credential files
+*.key
+*.pem
+*.crt
+secrets.json
+*.p12
+*.pfx
+ssh-keys/
+
+# BullMQ / queue persistence (if you have local dump dir)
+bullmq-data/
+
+# Misc
+coverage-report/
+reports/
+.idea/
+.tmp/
+
+# OS swap and thumbnails
+*~
+.~lock.*
