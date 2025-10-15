@@ -1,16 +1,22 @@
-# Dockerfile.dev
+# Dockerfile.dev (fixed: use env vars for npm config)
 FROM node:20
 
 WORKDIR /usr/src/app
 
-# copy package manifests first for caching
+# copy package manifests first to leverage Docker cache
 COPY package*.json ./
 
-# install dependencies (use npm i as requested)
-# note: using --silent to reduce noisy logs in docker build output
-RUN npm i --silent
+# Set npm config via environment variables (avoid `npm config set` parsing issues)
+ENV NPM_CONFIG_LEGACY_PEER_DEPS=true \
+    NPM_CONFIG_UNSAFE_PERM=true \
+    NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false \
+    NODE_ENV=development
 
-# copy rest of the sources (mounted in docker-compose for live reload)
+# install dependencies (dev)
+RUN npm i --silent --no-audit --no-fund
+
+# copy rest of the sources (will be mounted in docker-compose for live reload)
 COPY . .
 
 EXPOSE 3000
