@@ -81,20 +81,6 @@ Dev workflow:
 
 ---
 
-## Frontend (Vite + React + MUI)
-
-A minimal React UI to test the backend:
-
--   Health check (`GET /health`)
--   Register tenant (`POST /tenants/register`)
--   Send message (`POST /tenants/:tenantId/send`)
-
-**Start (dev):**
-
-```bash
-docker-compose up --build frontend
-
-
 ## Project layout (key files)
 
 ```
@@ -131,13 +117,13 @@ middlewares/rawBody.js # capture raw body for signature verification
 
 GET /health
 
-````
+```
 
 Response:
 
 ```json
 { "ok": true }
-````
+```
 
 ### 2) Register tenant (PoC)
 
@@ -321,3 +307,154 @@ If you want, I can:
 Reply with which next step you want.
 
 ---
+
+# WhatsApp Multi-Tenant Backend (Node.js + MongoDB + Docker)
+
+A development-friendly proof of concept for a **multi-tenant WhatsApp SaaS backend**.
+Each tenant connects their own WhatsApp number (via Cloud API), and messages from customers are handled automatically.
+
+---
+
+## Quick Start (Backend)
+
+Prerequisites:
+
+-   Docker & Docker Compose installed
+-   Environment variables configured as per `.env` in project root
+
+Start the entire stack (recommended):
+
+```bash
+docker-compose up --build
+```
+
+This will build and start backend services, database, and optional worker services.
+
+-   Backend API: `http://localhost:3000`
+-   Mongo Express (if enabled): `http://localhost:8081`
+
+---
+
+## Frontend (Vite + React + MUI)
+
+A minimal React UI to test the backend:
+
+-   Health check (`GET /health`)
+-   Register tenant (`POST /tenants/register`)
+-   Send message (`POST /tenants/:tenantId/send`)
+
+### Start (dev)
+
+**Recommended: start the whole stack** so that the Vite dev server inside Docker can proxy to the backend service name `app`:
+
+```bash
+docker-compose up --build
+```
+
+**Or** start backend and frontend together:
+
+```bash
+docker-compose up --build app frontend
+```
+
+Open the UI at: `http://localhost:5173`
+
+### Notes
+
+-   The Vite dev server is configured to proxy `/api/*` to the internal Docker hostname `http://app:3000`. This means that when both frontend and backend run in the same Docker Compose network, there is **no CORS** friction.
+-   Hot reload (HMR) is enabled and configured to work reliably inside containers by:
+    -   setting `CHOKIDAR_USEPOLLING: "true"` in the frontend service environment, and
+    -   enabling `watch.usePolling: true` in `vite.config.ts`.
+-   If you run the frontend directly on your **host machine** (not inside Docker), the Vite proxy `http://app:3000` will not resolve. In that case set the API base to your host backend address.
+
+### Running frontend on host (outside Docker)
+
+1. Create a `.env` file inside `frontend/`:
+
+    ```
+    VITE_API_BASE=http://localhost:3000
+    ```
+
+2. From `frontend/` directory run:
+    ```bash
+    npm install
+    npm run dev
+    ```
+
+Now the frontend will call `http://localhost:3000` directly.
+
+### Vite proxy details (dev inside Docker)
+
+`vite.config.ts` contains:
+
+```ts
+server: {
+  proxy: {
+    '/api': {
+      target: 'http://app:3000',
+      changeOrigin: true,
+      rewrite: (path) => path.replace(/^\/api/, '')
+    }
+  }
+}
+```
+
+This maps browser requests to `http://localhost:5173/api/...` to the backend service `app:3000`.
+
+---
+
+## Frontend file layout (created by the PoC)
+
+```
+frontend/
+├─ index.html
+├─ package.json
+├─ vite.config.ts
+├─ tsconfig.json
+├─ src/
+   ├─ main.tsx
+   ├─ App.tsx
+   ├─ lib/
+   │  └─ api.ts
+   └─ pages/
+      ├─ HealthCheck.tsx
+      ├─ TenantRegister.tsx
+      └─ SendMessage.tsx
+```
+
+### API helper (frontend/src/lib/api.ts)
+
+The frontend API client uses a Vite environment variable fallback:
+
+```ts
+const BASE = import.meta.env.VITE_API_BASE ?? "/api";
+```
+
+-   When inside Docker Compose, `/api` is proxied to `http://app:3000`.
+-   When running on host, set `VITE_API_BASE` to `http://localhost:3000`.
+
+---
+
+## Troubleshooting
+
+-   **Vite proxy returns connection errors**: likely the backend (`app`) is not yet ready. Start backend and frontend together with `docker-compose up --build` or ensure `app` is running on host if running frontend outside Docker.
+-   **HMR not updating**: ensure the `frontend` volume is mounted (`./frontend:/usr/src/app`) and `CHOKIDAR_USEPOLLING` is set. Also ensure your editor writes files to the mounted path (some editors create temp files).
+-   **Crypto/runtime errors**: ensure `MASTER_KEY` environment variable is set. Use the provided `src/utils/crypto.ts` which derives a 32-byte key using SHA-256 to tolerate varying key lengths.
+
+---
+
+## Development Tips
+
+-   To avoid installing node_modules on container start repeatedly, consider adding a simple `Dockerfile` for the frontend that runs `npm ci` during build. For pure dev, the current setup installs on container start for convenience.
+-   If you want the frontend to wait until backend health is ready, you can add a small health-check loop in the frontend command; this is optional and mostly helpful when starting frontend alone.
+-   Keep backend logs visible: `docker-compose logs -f app` is useful while developing.
+
+---
+
+## Contact / Next steps
+
+If you want, I can:
+
+-   produce a `Dockerfile` for the frontend to speed up restarts,
+-   add a small `wait-for-app.sh` wrapper so the frontend waits for backend health,
+-   make `frontend` use a dedicated `Dockerfile` and multi-stage build.
