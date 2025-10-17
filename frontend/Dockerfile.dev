@@ -1,26 +1,34 @@
-# frontend/Dockerfile.dev
-FROM node:18-bullseye-slim
+# syntax=docker/dockerfile:1.4
+FROM node:18-bullseye-slim AS base
+WORKDIR /usr/src/app
 
-# Install build tools needed by native modules
+# Install build tools once (cached)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends build-essential python3 ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /usr/src/app
-
-# Copy package.json and lockfile first (leverage cache)
+# ---------- deps stage: install node deps, use cache mount for npm cache ----------
+FROM base AS deps
+# copy only lockfiles to leverage caching
 COPY package.json package-lock.json* ./
 
-# Install deps during image build as root (avoids permission trouble)
-RUN npm ci --ignore-scripts --no-audit --no-fund
+# Use BuildKit cache for npm and node_modules to speed repeated builds
+RUN --mount=type=cache,target=/root/.npm \
+    --mount=type=cache,target=/usr/src/app/.npm-packages \
+    npm ci --prefer-offline --no-audit --no-fund
 
-# Create non-root node user and ensure ownership of the app directory
-RUN useradd --user-group --uid 1000 node || true \
- && chown -R node:node /usr/src/app
+# ---------- app stage: copy app files and final user setup ----------
+FROM base AS app
+# create a non-root user BEFORE copying files
+RUN useradd --user-group --uid 1000 node || true
 
-# Switch to non-root user for runtime
+# copy installed node_modules from deps stage, set ownership to node user using --chown
+COPY --from=deps --chown=node:node /usr/src/app/node_modules ./node_modules
+
+# copy app source with ownership so no chown needed
+COPY --chown=node:node . .
+
 USER node
 
-# Expose dev port and default cmd for dev
 EXPOSE 5173
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
