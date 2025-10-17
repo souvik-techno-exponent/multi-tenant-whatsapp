@@ -81,26 +81,42 @@ Dev workflow:
 
 ---
 
+## Frontend (Vite + React + MUI)
+
+A minimal React UI to test the backend:
+
+-   Health check (`GET /health`)
+-   Register tenant (`POST /tenants/register`)
+-   Send message (`POST /tenants/:tenantId/send`)
+
+**Start (dev):**
+
+```bash
+docker-compose up --build frontend
+
+
 ## Project layout (key files)
 
 ```
+
 docker-compose.yml
 Dockerfile.dev
 .env.example
 nodemon.json
 package.json
 src/
-  index.js          # server entrypoint
-  app.js            # express wiring & routes
-  db.js             # mongoose connect (with retry)
-  models.js         # Mongoose schemas (Tenant, Customer, Message, Conversation)
-  tenantService.js  # tenant helpers + encrypt/decrypt token
-  sendController.js # enqueue outbound sends
-  webhook.js        # webhook verify + routing by metadata.phone_number_id
-  worker.js         # BullMQ worker logic (send jobs)
-  workerProcess.js  # worker container entrypoint
-  utils/crypto.js   # AES-256-GCM encrypt/decrypt (POC)
-  middlewares/rawBody.js # capture raw body for signature verification
+index.js # server entrypoint
+app.js # express wiring & routes
+db.js # mongoose connect (with retry)
+models.js # Mongoose schemas (Tenant, Customer, Message, Conversation)
+tenantService.js # tenant helpers + encrypt/decrypt token
+sendController.js # enqueue outbound sends
+webhook.js # webhook verify + routing by metadata.phone_number_id
+worker.js # BullMQ worker logic (send jobs)
+workerProcess.js # worker container entrypoint
+utils/crypto.js # AES-256-GCM encrypt/decrypt (POC)
+middlewares/rawBody.js # capture raw body for signature verification
+
 ```
 
 ---
@@ -112,14 +128,16 @@ src/
 ### 1) Health
 
 ```
+
 GET /health
-```
+
+````
 
 Response:
 
 ```json
 { "ok": true }
-```
+````
 
 ### 2) Register tenant (PoC)
 
