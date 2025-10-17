@@ -1,0 +1,27 @@
+# frontend/Dockerfile.dev
+FROM node:18-bullseye-slim
+
+# Install basic build tools for native modules (node-gyp)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential python3 ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src/app
+
+# Create node user to avoid permission issues
+RUN useradd --user-group --uid 1000 node || true
+# set non-root user
+USER node
+
+# Copy package.json & lockfile first to leverage Docker cache
+# (do not copy node_modules)
+COPY --chown=node:node package.json package-lock.json* ./
+
+# Install deps in image (so "npm ci" runs at build-time)
+RUN npm i --silent --no-audit --no-fund
+
+# Expose dev port
+EXPOSE 5173
+
+# Default command is empty; docker-compose will run the dev server command
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
