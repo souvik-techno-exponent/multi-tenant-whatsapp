@@ -1,0 +1,11 @@
+node_modules
+dist
+build
+.git
+.gitignore
+.vscode
+.env
+*.log
+.DS_Store
+tmp
+*.pem
