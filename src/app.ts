@@ -41,4 +41,6 @@ app.post("/tenants/:tenantId/send", enqueueSend);
 
 app.get("/health", (_req: Request, res: Response) => res.json({ ok: true }));
 
+app.use("*", (_req: Request, res: Response) => res.status(501).json({ msg: 'This api is not implemented' }))
+
 export default app;
