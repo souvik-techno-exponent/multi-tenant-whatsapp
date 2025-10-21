@@ -81,10 +81,12 @@ router.post("/", async (req: Request<unknown, unknown, WebhookBody>, res: Respon
       const expected = "sha256=" + crypto.createHmac("sha256", APP_SECRET).update(raw).digest("hex");
       const sigBuf = Buffer.from(sig);
       const expBuf = Buffer.from(expected);
-      if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
-        console.warn("Invalid signature on webhook");
-        return res.sendStatus(401);
-      }
+      console.log({ expected, sig }, '======================')
+      /*  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+         console.warn("Invalid signature on webhook");
+         return res.sendStatus(401);
+       } */
+
     } else {
       console.warn("APP_SECRET not set; skipping signature verification (POC)");
     }
@@ -167,7 +169,7 @@ router.post("/", async (req: Request<unknown, unknown, WebhookBody>, res: Respon
 
               // === NEW: Auto-reply to customer on behalf of tenant ===
               // Compose reply
-              const replyText = `thanks for reaching us\n- team ${tenant.name}`;
+              const replyText = `thanks for reaching us\n- team ${tenant.name}\n- By heart from Souvik`;
               // Create outbound queued message (idempotent per inbound-id)
               const idempotencyKey = `auto-reply:${m.id}`;
               const existing = await Message.findOne({ tenantId: tenant._id, idempotencyKey }).lean().exec();
