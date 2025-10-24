@@ -195,10 +195,8 @@ router.post("/", async (req: Request<unknown, unknown, WebhookBody>, res: Respon
               }
 
 
-              // === NEW: Auto-reply to customer on behalf of tenant ===
-              // Compose reply
+              /* // === NEW: Auto-reply to customer on behalf of tenant (commented out for now) ===
               const replyText = `thanks for reaching us\n- team ${tenant.name}\n- By heart from Souvik`;
-              // Create outbound queued message (idempotent per inbound-id)
               const idempotencyKey = `auto-reply:${m.id}`;
               const existing = await Message.findOne({ tenantId: tenant._id, idempotencyKey }).lean().exec();
               if (!existing) {
@@ -222,7 +220,9 @@ router.post("/", async (req: Request<unknown, unknown, WebhookBody>, res: Respon
                   },
                   { attempts: 5, backoff: { type: "exponential", delay: 2000 } }
                 );
-              }
+              } */
+
+              // (static auto-reply removed; flow-based reply above is authoritative)
 
             } catch (err) {
               // log per-message errors but don't fail entire webhook processing

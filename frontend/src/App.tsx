@@ -5,6 +5,8 @@ import {
 import HealthCheck from './pages/HealthCheck';
 import TenantRegister from './pages/TenantRegister';
 import SendMessage from './pages/SendMessage';
+import TemplatesPage from './pages/Templates';
+import FlowsPage from './pages/Flows';
 
 // Simple tab-based UI to exercise backend endpoints.
 // Industry-standard patterns kept simple for PoC.
@@ -59,10 +61,12 @@ const App: React.FC = () => {
 
             <Container maxWidth="md">
                 <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-                    <Tabs value={value} onChange={handleChange} aria-label="main tabs">
+                    <Tabs value={value} onChange={handleChange} aria-label="main tabs" variant="scrollable" scrollButtons="auto">
                         <Tab label="Health" {...a11yProps(0)} />
                         <Tab label="Register Tenant" {...a11yProps(1)} />
                         <Tab label="Send Message" {...a11yProps(2)} />
+                        <Tab label="Templates" {...a11yProps(3)} />
+                        <Tab label="Flows" {...a11yProps(4)} />
                     </Tabs>
                 </Box>
 
@@ -84,6 +88,13 @@ const App: React.FC = () => {
                             No stored tenant ID. Register one first or paste a valid ID.
                         </Typography>
                     )}
+                </TabPanel>
+
+                <TabPanel value={value} index={3}>
+                    <TemplatesPage />
+                </TabPanel>
+                <TabPanel value={value} index={4}>
+                    <FlowsPage />
                 </TabPanel>
             </Container>
         </Box>

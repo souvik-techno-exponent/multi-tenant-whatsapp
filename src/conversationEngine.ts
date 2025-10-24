@@ -35,6 +35,8 @@ export async function handleInbound(opts: {
             } catch {
                 // ignore bad regex
             }
+        } else if (type === MatchType.Equals) {
+            matched = msg.toLowerCase() === value.toLowerCase();
         }
         if (!matched) continue;
 

@@ -10,11 +10,21 @@ export interface UpsertTemplateInput {
     isActive?: boolean;
 }
 
+function extractVarsFromBody(s: string): string[] {
+    const re = /{{\s*([\w.-]+)\s*}}/g;
+    const set = new Set<string>();
+    for (const m of s.matchAll(re)) {
+        if (m[1]) set.add(m[1]);
+    }
+    return Array.from(set);
+}
+
 export async function upsertTemplate(input: UpsertTemplateInput): Promise<TemplateDoc> {
     const { tenantId, key, body, variables, description, isActive } = input;
+    const inferred = variables ?? extractVarsFromBody(body);
     const update = {
         body,
-        variables: variables ?? [],
+        variables: inferred,
         description,
         isActive: isActive ?? true,
         $inc: { version: 1 }
