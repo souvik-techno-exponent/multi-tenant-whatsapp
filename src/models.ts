@@ -1,4 +1,5 @@
 import mongoose, { Schema, InferSchemaType, Types, model } from "mongoose";
+import { MatchType } from "./conversation/types";
 
 /** Tenant schema */
 const tenantSchema = new Schema(
@@ -98,7 +99,7 @@ const flowSchema = new Schema(
         rules: [
             {
                 when: {
-                    type: { type: String, enum: ["regex", "contains"], required: true },
+                    type: { type: MatchType, required: true },
                     value: { type: String, required: true }
                 },
                 action: {
