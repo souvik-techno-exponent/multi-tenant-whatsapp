@@ -1,3 +1,278 @@
+# Project README
+
+This repository contains the messaging backend and related services.
+
+## Table of Contents
+
+-   Quick Start
+-   Environment
+-   Running locally (development)
+-   API: Templates
+-   API: Flows
+-   API: Sending messages
+-   Webhook security (signature verification)
+-   Idempotency & retries
+-   Errors & status codes
+-   Postman / OpenAPI
+-   Contributing
+
+---
+
+## Quick Start
+
+Follow these steps to run the app locally for development.
+
+1. Copy environment file:
+
+```bash
+cp .env.example .env
+# edit .env to set MONGO_URI, REDIS, APP_SECRET etc.
+```
+
+2. Install dependencies:
+
+```bash
+# backend
+cd server
+npm install
+
+# frontend (if applicable)
+cd ../client
+npm install
+```
+
+3. Start services (local development):
+
+```bash
+# start redis & mongodb (e.g. docker compose) or ensure they are running
+npm run dev # runs the backend with nodemon
+```
+
+If you prefer Docker, add a `Dockerfile.dev` or `docker-compose.yml` in the repo root and update this section accordingly.
+
+---
+
+## Environment
+
+Add a `.env.example` file to the repo root with the following keys (example values).
+Keep secrets out of the repo; use environment variables or a secrets manager in production.
+
+```text
+# .env.example (DO NOT COMMIT real secrets)
+APP_ENV=development
+PORT=3000
+MONGO_URI=mongodb://localhost:27017/messaging
+REDIS_URL=redis://localhost:6379
+APP_SECRET=your_app_secret_here
+VERIFY_TOKEN=webhook_verify_token
+MASTER_KEY=master_key_for_admin_ops
+VITE_API_BASE=http://localhost:3000/api
+```
+
+Ensure README points to `.env.example` and instructs developers to create `.env` from it.
+
+---
+
+## API: Templates
+
+Create a template for a tenant.
+
+**POST** `/tenants/:tenantId/templates`
+
+Request example:
+
+```bash
+curl -X POST "http://localhost:3000/api/tenants/tenant_123/templates" \
+  -H "Authorization: Bearer <MASTER_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "key": "welcome_v1",
+    "language": "en",
+    "components": [
+      {
+        "type": "body",
+        "text": "Hello {{first_name}}, welcome to our service!"
+      }
+    ],
+    "metadata": {
+      "description": "Welcome message"
+    }
+  }'
+```
+
+Expected 201 response: created template JSON.
+
+Notes:
+
+-   Validation: `key` must be unique per tenant.
+-   Versioning: when updating, consider storing `version` or `updatedAt`.
+
+---
+
+## API: Flows
+
+Create or update conversational flows for a tenant.
+
+**POST** `/tenants/:tenantId/flows`
+
+Request example:
+
+```bash
+curl -X POST "http://localhost:3000/api/tenants/tenant_123/flows" \
+  -H "Authorization: Bearer <MASTER_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "flows": [
+      {
+        "id": "greeting_flow",
+        "match": { "contains": ["hello", "hi"] },
+        "action": { "type": "send_template", "templateKey": "welcome_v1" }
+      }
+    ],
+    "fallbackTemplateKey": "fallback_v1"
+  }'
+```
+
+Response: 200 with saved flows.
+
+Document the flow rule schema (simple boolean operators, contains, regex, exact) and any limits (max rules).
+
+---
+
+## API: Sending messages
+
+There are two primary paths:
+
+-   **Send raw message** (custom payload)  
+    **POST** `/tenants/:tenantId/send`
+
+-   **Send using a stored template**  
+    **POST** `/tenants/:tenantId/send/template`
+
+Template send example:
+
+```bash
+curl -X POST "http://localhost:3000/api/tenants/tenant_123/send/template" \
+  -H "Authorization: Bearer <MASTER_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "to": "+15551234567",
+    "templateKey": "welcome_v1",
+    "variables": { "first_name": "Sam" },
+    "idempotency_key": "send:order:12345"
+  }'
+```
+
+Notes:
+
+-   `idempotency_key` should be supplied by clients to prevent duplicate sends.
+-   System also uses auto-generated idempotency keys for worker retries.
+
+---
+
+## Webhook security (signature verification)
+
+Incoming webhooks (e.g. WhatsApp webhook) MUST be verified. Example `openssl` command:
+
+```bash
+# compute HMAC-SHA256 over raw request body using APP_SECRET
+echo -n '<raw-body>' | openssl dgst -sha256 -hmac "$APP_SECRET"
+```
+
+Node example (Express.js raw body):
+
+```js
+// express route example
+const crypto = require("crypto");
+
+function verifySignature(rawBody, signatureHeader, secret) {
+    const expected = crypto.createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signatureHeader));
+}
+```
+
+Implement `rawBody` capture (e.g. `express.raw({ type: '*/*' })`) to ensure exact bytes are used for HMAC.
+
+---
+
+## Idempotency & retries
+
+Behaviour:
+
+-   The API accepts `idempotency_key` for sends. The server will persist and reject duplicate requests with the same key.
+-   Auto-replies use idempotency keys in the format: `auto-reply:<inboundId>` to avoid sending duplicate auto responses.
+-   Workers must be idempotent: storing `message.status` and using unique constraints (e.g. unique on `externalId` or `idempotencyKey`) to avoid duplicates.
+
+Example idempotency collision response:
+
+```json
+{
+    "error": "Conflict",
+    "message": "Request with the given idempotency_key already processed"
+}
+```
+
+---
+
+## Errors & status codes
+
+Common responses:
+
+-   `400 Bad Request` — validation error or missing required data.
+-   `401 Unauthorized` — missing/invalid auth token.
+-   `404 Not Found` — resource not found (e.g. template key).
+-   `409 Conflict` — duplicate resource or idempotency conflict (Mongo duplicate key).
+-   `500 Internal Server Error` — unexpected server error.
+
+Include sample error bodies in the API responses for clarity.
+
+---
+
+## Postman / OpenAPI
+
+Provide an OpenAPI (Swagger) skeleton or Postman collection in the `docs/` folder.
+At minimum include endpoints:
+
+-   `/tenants/{tenantId}/templates`
+-   `/tenants/{tenantId}/flows`
+-   `/tenants/{tenantId}/send`
+-   `/webhook`
+
+This accelerates testing and onboarding for QA and integrators.
+
+---
+
+## Contributing
+
+Please add a `CONTRIBUTING.md` describing:
+
+-   Repo layout
+-   Branching model (e.g., `main` protected, feature branches `feat/*`)
+-   PR checklist (lint, tests, changelog)
+-   How to run unit and integration tests (Jest + supertest recommended)
+
+---
+
+## Diagrams (recommended)
+
+Add a small sequence diagram or PNG in `docs/diagrams/` showing:
+`inbound webhook -> router -> persist -> flow engine -> enqueue -> worker -> external API`
+
+Add a simple ER diagram for core models: Tenant, Customer, Message, Template, Flow.
+
+---
+
+## Notes
+
+This README patch focuses on filling the critical gaps:
+
+-   `.env.example` mention and example
+-   webhook signature verification snippet
+-   API examples for templates, flows, sending
+-   idempotency and error codes
+
+Add further detail to each API section (schemas, full example responses) as you stabilize the contract.
+
 # WhatsApp Multi‑Tenant Backend (Node.js + MongoDB + Docker)
 
 A development-friendly proof of concept for a **multi-tenant WhatsApp SaaS backend**.  
