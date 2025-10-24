@@ -1,209 +1,468 @@
-# Project README
+# WhatsApp Multi-Tenant Backend (Node.js + MongoDB + Redis + BullMQ)
 
-This repository contains the messaging backend and related services.
-
-## Table of Contents
-
--   Quick Start
--   Environment
--   Running locally (development)
--   API: Templates
--   API: Flows
--   API: Sending messages
--   Webhook security (signature verification)
--   Idempotency & retries
--   Errors & status codes
--   Postman / OpenAPI
--   Contributing
+> Development-friendly proof-of-concept for a multi-tenant WhatsApp messaging backend.
+> Each tenant connects their own WhatsApp phone_number via Meta Cloud API (or simulated tokens in dev),
+> incoming messages are routed to the correct tenant, and outbound messages are queued with retries
+> and idempotency guarantees.
 
 ---
 
-## Quick Start
+## Table of Contents
 
-Follow these steps to run the app locally for development.
+-   [Summary](#summary)
+-   [Features](#features)
+-   [Prerequisites](#prerequisites)
+-   [Quickstart (Development)](#quickstart-development)
+-   [Environment variables / .env.example](#environment-variables--envexample)
+-   [Docker / Compose usage](#docker--compose-usage)
+-   [Project layout](#project-layout)
+-   [API Reference (curl examples)](#api-reference-curl-examples)
+    -   [Health](#health)
+    -   [Register Tenant](#register-tenant)
+    -   [Templates](#templates)
+    -   [Flows](#flows)
+    -   [Send Message (raw & template)](#send-message-raw--template)
+    -   [Webhook (verify & events)](#webhook-verify--events)
+-   [Webhook signature verification (security)](#webhook-signature-verification-security)
+-   [Data model (conceptual)](#data-model-conceptual)
+-   [Queueing, retries & idempotency](#queueing-retries--idempotency)
+-   [Errors & status codes](#errors--status-codes)
+-   [Testing & local development tips](#testing--local-development-tips)
+-   [Observability & troubleshooting](#observability--troubleshooting)
+-   [Production considerations](#production-considerations)
+-   [OpenAPI / Postman](#openapi--postman)
+-   [Contributing](#contributing)
+-   [License](#license)
+-   [Contact / Next steps](#contact--next-steps)
 
-1. Copy environment file:
+---
+
+## Summary
+
+This repository implements a PoC multi-tenant WhatsApp backend with:
+
+-   Node.js + Express server
+-   MongoDB (Mongoose) for persistence
+-   Redis + BullMQ for job queueing and retries
+-   Worker process for sending outbound messages
+-   Per-tenant onboarding, template storage, flows, and send APIs
+-   Webhook receiver that routes inbound events to the correct tenant using `metadata.phone_number_id`
+-   Idempotency protections and duplicate detection
+
+This README documents local development, APIs, security, and recommended production improvements.
+
+---
+
+## Features
+
+-   Tenant registration (manual PoC or simulated tokens)
+-   Template storage (per-tenant)
+-   Flow rules (match inbound text → send template / set state)
+-   Queued outbound sends, with retries and exponential backoff
+-   Auto-reply for inbound messages (idempotent)
+-   Webhook signature verification (HMAC-SHA256)
+-   Simple encryption of tenant tokens using a `MASTER_KEY` (dev-only pattern)
+
+---
+
+## Prerequisites
+
+-   Node.js (>=16 recommended) — if running locally
+-   npm or yarn
+-   Docker & Docker Compose (recommended for full stack dev)
+-   Redis
+-   MongoDB
+
+You can run the full stack with Docker Compose (recommended) or run components locally. Examples below.
+
+---
+
+## Quickstart (Development)
+
+1. Copy environment example:
 
 ```bash
 cp .env.example .env
-# edit .env to set MONGO_URI, REDIS, APP_SECRET etc.
+# Edit .env and fill in real values for dev (or keep dev defaults)
 ```
 
-2. Install dependencies:
+2. Install dependencies (if running locally):
 
 ```bash
 # backend
 cd server
 npm install
 
-# frontend (if applicable)
-cd ../client
+# frontend (optional test UI)
+cd ../frontend
 npm install
 ```
 
-3. Start services (local development):
+3. Start dependencies (if not using docker-compose):
+
+-   Start MongoDB and Redis (local or via docker).
+-   Run the backend:
 
 ```bash
-# start redis & mongodb (e.g. docker compose) or ensure they are running
-npm run dev # runs the backend with nodemon
+# from server/
+npm run dev   # uses nodemon to restart on changes
 ```
 
-If you prefer Docker, add a `Dockerfile.dev` or `docker-compose.yml` in the repo root and update this section accordingly.
+4. Or start full stack with Docker Compose:
+
+```bash
+docker-compose up --build
+```
+
+Service endpoints (defaults):
+
+-   Backend API: `http://localhost:3000`
+-   Frontend dev (Vite): `http://localhost:5173` (if provided)
+-   Mongo Express (optional): `http://localhost:8081`
 
 ---
 
-## Environment
+## Environment variables / .env.example
 
-Add a `.env.example` file to the repo root with the following keys (example values).
-Keep secrets out of the repo; use environment variables or a secrets manager in production.
+Create `.env` from `.env.example`. Example content:
 
 ```text
-# .env.example (DO NOT COMMIT real secrets)
+# .env.example (DO NOT COMMIT REAL SECRETS)
 APP_ENV=development
 PORT=3000
-MONGO_URI=mongodb://localhost:27017/messaging
-REDIS_URL=redis://localhost:6379
-APP_SECRET=your_app_secret_here
-VERIFY_TOKEN=webhook_verify_token
-MASTER_KEY=master_key_for_admin_ops
+
+# Mongo
+MONGO_URI=mongodb://mongo:27017/pocdb
+
+# Redis (BullMQ)
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_URL=redis://redis:6379
+
+# Security
+APP_SECRET=your_meta_app_secret_here   # used to verify incoming webhook signatures
+VERIFY_TOKEN=local_verify_token        # used for webhook verification challenge
+MASTER_KEY=32_byte_random_string_here  # used to encrypt tenant access tokens (dev-only)
+
+# App behavior
+WHATSAPP_API_VERSION=v20.0
 VITE_API_BASE=http://localhost:3000/api
+
+# Optional
+LOG_LEVEL=info
 ```
 
-Ensure README points to `.env.example` and instructs developers to create `.env` from it.
+**Security note:** In production use a secrets manager (KMS) and do not store secrets in plaintext.
 
 ---
 
-## API: Templates
+## Docker / Compose usage
 
-Create a template for a tenant.
+Provide a `docker-compose.yml` at repo root that includes services:
 
-**POST** `/tenants/:tenantId/templates`
+-   `app` (backend)
+-   `worker` (BullMQ worker)
+-   `mongo`
+-   `redis`
+-   optional `mongo-express` and `frontend` (vite)
 
-Request example:
+Example:
 
 ```bash
-curl -X POST "http://localhost:3000/api/tenants/tenant_123/templates" \
-  -H "Authorization: Bearer <MASTER_KEY>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "key": "welcome_v1",
-    "language": "en",
-    "components": [
-      {
-        "type": "body",
-        "text": "Hello {{first_name}}, welcome to our service!"
-      }
-    ],
-    "metadata": {
-      "description": "Welcome message"
-    }
-  }'
+docker-compose up --build
+# tail logs
+docker-compose logs -f app
+docker-compose logs -f worker
 ```
 
-Expected 201 response: created template JSON.
+If you modify `package.json` deps, rebuild images:
 
-Notes:
-
--   Validation: `key` must be unique per tenant.
--   Versioning: when updating, consider storing `version` or `updatedAt`.
+```bash
+docker-compose build app worker
+```
 
 ---
 
-## API: Flows
+## Project layout
 
-Create or update conversational flows for a tenant.
+(Adjust to your actual project paths)
 
-**POST** `/tenants/:tenantId/flows`
-
-Request example:
-
-```bash
-curl -X POST "http://localhost:3000/api/tenants/tenant_123/flows" \
-  -H "Authorization: Bearer <MASTER_KEY>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "flows": [
-      {
-        "id": "greeting_flow",
-        "match": { "contains": ["hello", "hi"] },
-        "action": { "type": "send_template", "templateKey": "welcome_v1" }
-      }
-    ],
-    "fallbackTemplateKey": "fallback_v1"
-  }'
 ```
-
-Response: 200 with saved flows.
-
-Document the flow rule schema (simple boolean operators, contains, regex, exact) and any limits (max rules).
+.
+├─ docker-compose.yml
+├─ Dockerfile.dev
+├─ .env.example
+├─ server/
+│  ├─ package.json
+│  ├─ src/
+│  │  ├─ index.js          # app entry
+│  │  ├─ app.js            # express and routing
+│  │  ├─ db.js             # mongoose connection (with retry)
+│  │  ├─ models/           # mongoose models (Tenant, Customer, Message, Flow, Template)
+│  │  ├─ controllers/      # route handlers
+│  │  ├─ services/         # send, tenant service, flow engine
+│  │  ├─ workers/          # bullmq workers
+│  │  └─ middlewares/      # raw body capture, auth, error handler
+├─ frontend/                # optional react/vite test UI
+└─ docs/
+   ├─ openapi.yaml
+   └─ diagrams/
+```
 
 ---
 
-## API: Sending messages
+## API Reference (curl examples)
 
-There are two primary paths:
+Base URL (dev): `http://localhost:3000/api`  
+(If your server does not mount at `/api`, use root `http://localhost:3000`)
 
--   **Send raw message** (custom payload)  
-    **POST** `/tenants/:tenantId/send`
+> NOTE: This section shows representative endpoints. Replace `:tenantId` with the actual tenant `_id` from DB.
 
--   **Send using a stored template**  
-    **POST** `/tenants/:tenantId/send/template`
-
-Template send example:
+### Health
 
 ```bash
-curl -X POST "http://localhost:3000/api/tenants/tenant_123/send/template" \
-  -H "Authorization: Bearer <MASTER_KEY>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "to": "+15551234567",
-    "templateKey": "welcome_v1",
-    "variables": { "first_name": "Sam" },
-    "idempotency_key": "send:order:12345"
-  }'
+GET /health
+# Response
+{ "ok": true }
 ```
 
-Notes:
+### Register Tenant (PoC)
 
--   `idempotency_key` should be supplied by clients to prevent duplicate sends.
--   System also uses auto-generated idempotency keys for worker retries.
-
----
-
-## Webhook security (signature verification)
-
-Incoming webhooks (e.g. WhatsApp webhook) MUST be verified. Example `openssl` command:
+Registers a tenant and stores encrypted access token (dev PoC).
 
 ```bash
-# compute HMAC-SHA256 over raw request body using APP_SECRET
-echo -n '<raw-body>' | openssl dgst -sha256 -hmac "$APP_SECRET"
-```
+POST /tenants/register
+Content-Type: application/json
 
-Node example (Express.js raw body):
-
-```js
-// express route example
-const crypto = require("crypto");
-
-function verifySignature(rawBody, signatureHeader, secret) {
-    const expected = crypto.createHmac("sha256", secret).update(rawBody, "utf8").digest("hex");
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signatureHeader));
+Body:
+{
+  "name": "Tenant A",
+  "phoneNumberId": "111111111111111",
+  "accessToken": "mock_token_tenant_A"
 }
 ```
 
-Implement `rawBody` capture (e.g. `express.raw({ type: '*/*' })`) to ensure exact bytes are used for HMAC.
+Response: `201 Created` with tenant JSON.
+
+### Templates
+
+Create template (per tenant):
+
+```bash
+POST /tenants/:tenantId/templates
+Authorization: Bearer <MASTER_KEY>
+Content-Type: application/json
+
+Body:
+{
+  "key": "welcome_v1",
+  "language": "en",
+  "components": [
+    { "type": "body", "text": "Hello {{first_name}}, welcome!" }
+  ],
+  "metadata": { "description": "Welcome template" }
+}
+```
+
+Get templates:
+
+```bash
+GET /tenants/:tenantId/templates
+```
+
+Notes: `key` must be unique per tenant. API returns `201` on create.
+
+### Flows
+
+Save or update flow rules for a tenant:
+
+```bash
+POST /tenants/:tenantId/flows
+Authorization: Bearer <MASTER_KEY>
+Content-Type: application/json
+
+Body:
+{
+  "flows": [
+    {
+      "id": "greeting_flow",
+      "match": { "type": "contains", "values": ["hello","hi"] },
+      "action": { "type": "send_template", "templateKey": "welcome_v1" }
+    }
+  ],
+  "fallbackTemplateKey": "fallback_v1"
+}
+```
+
+GET flows:
+
+```bash
+GET /tenants/:tenantId/flows
+```
+
+Document the flow schema in `docs/flow-schema.md` (recommended): types supported (`contains`, `regex`, `exact`, boolean composition), limits and evaluation order.
+
+### Send Message (raw & template)
+
+**Send raw text (custom payload):**
+
+```bash
+POST /tenants/:tenantId/send
+Authorization: Bearer <MASTER_KEY>
+Content-Type: application/json
+
+Body:
+{
+  "to": "+15551234567",
+  "text": "Hello Sam",
+  "idempotency_key": "send:order:12345"
+}
+```
+
+**Send using stored template:**
+
+```bash
+POST /tenants/:tenantId/send/template
+Authorization: Bearer <MASTER_KEY>
+Content-Type: application/json
+
+Body:
+{
+  "to": "+15551234567",
+  "templateKey": "welcome_v1",
+  "variables": { "first_name": "Sam" },
+  "idempotency_key": "send:order:12345"
+}
+```
+
+Responses:
+
+-   `202 Accepted` when queued, or `201 Created` with message object depending on implementation.
+-   `409 Conflict` if idempotency key exists.
+
+### Webhook (verify & events)
+
+**Verify endpoint (GET)**
+
+Meta verification:
+
+```bash
+GET /whatsapp/webhook?hub.mode=subscribe&hub.verify_token=<VERIFY_TOKEN>&hub.challenge=<challenge>
+```
+
+Return `hub.challenge` when `hub.verify_token` matches `VERIFY_TOKEN`.
+
+**Receive events (POST)**
+
+```bash
+POST /whatsapp/webhook
+Headers:
+  X-Hub-Signature-256: sha256=<hex>  # if APP_SECRET set
+Body: JSON with 'entry' / 'changes' from Meta
+```
+
+Behavior:
+
+-   Parse `metadata.phone_number_id` → find tenant with matching `phoneNumberId`
+-   Persist inbound `Message` (direction: IN)
+-   Upsert `Customer` by `from` (wa id)
+-   Evaluate `flows` for tenant; enqueue outbound action(s)
+-   Enqueue an auto-reply (idempotent) if configured
 
 ---
 
-## Idempotency & retries
+## Webhook signature verification (security)
 
-Behaviour:
+Always verify incoming webhooks using HMAC-SHA256 computed over the **exact raw request body** with `APP_SECRET`.
 
--   The API accepts `idempotency_key` for sends. The server will persist and reject duplicate requests with the same key.
--   Auto-replies use idempotency keys in the format: `auto-reply:<inboundId>` to avoid sending duplicate auto responses.
--   Workers must be idempotent: storing `message.status` and using unique constraints (e.g. unique on `externalId` or `idempotencyKey`) to avoid duplicates.
+**OpenSSL example:**
 
-Example idempotency collision response:
+```bash
+echo -n '<raw-body-json>' | openssl dgst -sha256 -hmac "$APP_SECRET"
+# The result will be like: (stdin)= <hex>
+# Header value expected: sha256=<hex>
+```
+
+**Node (Express) example:**
+
+```js
+// Use express.raw to capture the exact bytes before JSON parsing:
+app.post("/whatsapp/webhook", express.raw({ type: "*/*" }), (req, res) => {
+    const signatureHeader = req.get("X-Hub-Signature-256") || "";
+    const raw = req.body; // Buffer
+    const expected = "sha256=" + crypto.createHmac("sha256", process.env.APP_SECRET).update(raw).digest("hex");
+
+    if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signatureHeader))) {
+        return res.status(401).send("Invalid signature");
+    }
+
+    // Now parse JSON safely:
+    const parsed = JSON.parse(raw.toString("utf8"));
+    // ... handle event
+});
+```
+
+**Important:** Use `express.raw` or an equivalent to get the **raw bytes**. Do not use `express.json()` before verifying.
+
+---
+
+## Data model (conceptual)
+
+**Tenant**
+
+-   `_id`, `name`, `phoneNumberId` (unique), `wabaId`, `accessTokenEnc`, `status`, `createdAt`, `updatedAt`
+
+**Customer**
+
+-   `_id`, `tenantId`, `waId` (E.164), `name`, `lastSeenAt`, `metadata`
+
+**Message**
+
+-   `_id`, `tenantId`, `conversationId?`, `direction` (`IN` | `OUT`), `waMessageId`, `body`, `idempotencyKey`, `status` (`queued|sending|sent|delivered|read|failed`), `attempts`, timestamps
+
+**Template**
+
+-   `_id`, `tenantId`, `key`, `language`, `components`, `metadata`, `version`, timestamps
+
+**Flow**
+
+-   `_id`, `tenantId`, `id`, `rules[]`, `fallbackTemplateKey`, timestamps
+
+Add full Mongoose schemas in `server/src/models/` and document indexes (e.g., unique index on `(tenantId, idempotencyKey)`).
+
+---
+
+## Queueing, retries & idempotency
+
+-   **Queue:** BullMQ queue (`whatsapp-send-queue`) processes outbound send jobs.
+-   **Retry strategy:** configurable attempts (e.g., 5) with exponential backoff.
+-   **Idempotency:** store `idempotencyKey` per-tenant in messages collection; create unique partial index:
+    ```js
+    db.messages.createIndex({ tenantId: 1, idempotencyKey: 1 }, { unique: true, partialFilterExpression: { idempotencyKey: { $exists: true } } });
+    ```
+-   **Auto-replies:** use deterministic idempotency key `auto-reply:<inbound-wa-message-id>` to avoid duplicates.
+-   **Worker safety:** worker must check message status before attempting send and use transactions / upserts when possible to mark job processed.
+
+---
+
+## Errors & status codes
+
+Common API responses:
+
+-   `200 OK` — successful GET or idempotent update
+-   `201 Created` — resource created
+-   `202 Accepted` — request accepted and enqueued
+-   `400 Bad Request` — validation error / missing fields
+-   `401 Unauthorized` — invalid / missing auth token
+-   `403 Forbidden` — insufficient permissions
+-   `404 Not Found` — resource does not exist
+-   `409 Conflict` — duplicate (e.g., unique index violation or idempotency collision)
+-   `422 Unprocessable Entity` — semantic errors (optional)
+-   `500 Internal Server Error` — unexpected errors
+
+Return JSON error bodies with `error` and `message` fields for clients to parse.
+
+Example 409:
 
 ```json
 {
@@ -214,522 +473,99 @@ Example idempotency collision response:
 
 ---
 
-## Errors & status codes
+## Testing & local development tips
 
-Common responses:
-
--   `400 Bad Request` — validation error or missing required data.
--   `401 Unauthorized` — missing/invalid auth token.
--   `404 Not Found` — resource not found (e.g. template key).
--   `409 Conflict` — duplicate resource or idempotency conflict (Mongo duplicate key).
--   `500 Internal Server Error` — unexpected server error.
-
-Include sample error bodies in the API responses for clarity.
-
----
-
-## Postman / OpenAPI
-
-Provide an OpenAPI (Swagger) skeleton or Postman collection in the `docs/` folder.
-At minimum include endpoints:
-
--   `/tenants/{tenantId}/templates`
--   `/tenants/{tenantId}/flows`
--   `/tenants/{tenantId}/send`
--   `/webhook`
-
-This accelerates testing and onboarding for QA and integrators.
-
----
-
-## Contributing
-
-Please add a `CONTRIBUTING.md` describing:
-
--   Repo layout
--   Branching model (e.g., `main` protected, feature branches `feat/*`)
--   PR checklist (lint, tests, changelog)
--   How to run unit and integration tests (Jest + supertest recommended)
-
----
-
-## Diagrams (recommended)
-
-Add a small sequence diagram or PNG in `docs/diagrams/` showing:
-`inbound webhook -> router -> persist -> flow engine -> enqueue -> worker -> external API`
-
-Add a simple ER diagram for core models: Tenant, Customer, Message, Template, Flow.
-
----
-
-## Notes
-
-This README patch focuses on filling the critical gaps:
-
--   `.env.example` mention and example
--   webhook signature verification snippet
--   API examples for templates, flows, sending
--   idempotency and error codes
-
-Add further detail to each API section (schemas, full example responses) as you stabilize the contract.
-
-# WhatsApp Multi‑Tenant Backend (Node.js + MongoDB + Docker)
-
-A development-friendly proof of concept for a **multi-tenant WhatsApp SaaS backend**.  
-Each tenant connects their own WhatsApp number (via Cloud API), and messages from customers are handled automatically.
-
-**This merged, up‑to‑date README** consolidates the previous structured notes and the latest README. Stale/duplicate sections have been removed.
-
----
-
-## Summary
-
-Multi-tenant WhatsApp PoC using:
-
--   Node.js + Express
--   MongoDB (Mongoose)
--   Redis + BullMQ (job queue)
--   Dev Docker setup with `nodemon` for live reload
-
-Features:
-
--   Tenant onboarding (PoC manual token)
--   Shared webhook that routes inbound events to correct tenant via `metadata.phone_number_id`
--   Outbound send queue with retries & idempotency
--   Auto-reply: every inbound message triggers:
-    ```
-    thanks for reaching us
-    - team <tenant.name>
-    ```
--   Dev-friendly Docker compose (app + worker + mongo + redis + mongo-express)
-
----
-
-## Prerequisites
-
--   Docker & Docker Compose
--   Node.js (optional if running inside Docker)
--   npm (optional)
--   Copy `.env.example` → `.env` and fill values.
-
-**Env variables (examples)**
-
-```env
-APP_SECRET=your_meta_app_secret_here
-VERIFY_TOKEN=local_verify_token_for_meta
-MASTER_KEY=32_byte_random_string_here   # >=32 chars for AES-256-GCM in PoC
-MONGO_URI=mongodb://mongo:27017/pocdb
-REDIS_HOST=redis
-REDIS_PORT=6379
-WHATSAPP_API_VERSION=v20.0
-PORT=3000
-```
-
-> Security note: `MASTER_KEY` encryption in this PoC is for convenience only. In production use a KMS / Secrets Manager and rotate tokens.
-
----
-
-## Quick start (development)
-
-1. Copy `.env.example` to `.env` and fill values.
-2. Build and start:
-
-```bash
-docker-compose up --build
-```
-
-3. App URL: `http://localhost:3000`  
-   Mongo-express UI: `http://localhost:8081` (user: `admin`, pass: `pass`)
-
-Dev workflow:
-
--   Files are mounted into the container; `nodemon` watches `src/` and restarts the server on change.
--   If you add new dependencies, rebuild images:
-    ```bash
-    docker-compose build app worker
-    ```
--   Tail logs:
-    ```bash
-    docker-compose logs -f app
-    docker-compose logs -f worker
-    ```
-
----
-
-## Project layout (key files)
-
-```
-
-docker-compose.yml
-Dockerfile.dev
-.env.example
-nodemon.json
-package.json
-src/
-index.js # server entrypoint
-app.js # express wiring & routes
-db.js # mongoose connect (with retry)
-models.js # Mongoose schemas (Tenant, Customer, Message, Conversation)
-tenantService.js # tenant helpers + encrypt/decrypt token
-sendController.js # enqueue outbound sends
-webhook.js # webhook verify + routing by metadata.phone_number_id
-worker.js # BullMQ worker logic (send jobs)
-workerProcess.js # worker container entrypoint
-utils/crypto.js # AES-256-GCM encrypt/decrypt (POC)
-middlewares/rawBody.js # capture raw body for signature verification
-
-```
-
----
-
-## API reference (for Postman / curl)
-
-> Base URL: `http://localhost:3000`
-
-### 1) Health
-
-```
-
-GET /health
-
-```
-
-Response:
-
-```json
-{ "ok": true }
-```
-
-### 2) Register tenant (PoC)
-
-```
-POST /tenants/register
-Content-Type: application/json
-```
-
-Body:
+-   Unit tests: Jest / Vitest for services and controllers
+-   Integration tests: supertest + in-memory MongoDB (mongodb-memory-server) and a mocked BullMQ/Redis
+-   Linting: ESLint + Prettier
+-   Example commands (add these to `package.json` scripts):
 
 ```json
 {
-    "name": "Tenant A",
-    "phoneNumberId": "111111111111111",
-    "accessToken": "mock_token_tenant_A"
+    "scripts": {
+        "dev": "nodemon --watch src --exec \"node -r dotenv/config src/index.js\"",
+        "start": "node src/index.js",
+        "test": "jest --runInBand",
+        "lint": "eslint src --fix"
+    }
 }
 ```
 
-Notes: In production use Embedded Signup. `mock_` tokens simulate sends.
-
-Curl:
-
-```bash
-curl -X POST http://localhost:3000/tenants/register   -H "Content-Type: application/json"   -d '{"name":"Tenant A","phoneNumberId":"111111111111111","accessToken":"mock_token_tenant_A"}'
-```
-
-### 3) Send message (outbound)
-
-```
-POST /tenants/:tenantId/send
-Content-Type: application/json
-```
-
-Body:
-
-```json
-{
-  "to": "+919012345678",
-  "text": "Hello there",
-  "idempotency_key": "order-1234"  # optional but recommended
-}
-```
-
-Curl:
-
-```bash
-curl -X POST http://localhost:3000/tenants/<TENANT_ID>/send  -H "Content-Type: application/json"  -d '{"to":"+919012345678","text":"Hello","idempotency_key":"order-1234"}'
-```
-
-Creates DB message (status=queued) and enqueues a job.
-
-### 4) Webhook verification (Meta)
-
-```
-GET /whatsapp/webhook?hub.mode=subscribe&hub.verify_token=<VERIFY_TOKEN>&hub.challenge=<challenge>
-```
-
-Responds with challenge if token matches.
-
-### 5) Webhook POST (incoming events)
-
-```
-POST /whatsapp/webhook
-Content-Type: application/json
-Headers: X-Hub-Signature-256: sha256=<hex>  # required if APP_SECRET set
-```
-
-Example body:
-
-```json
-{
-    "entry": [
-        {
-            "changes": [
-                {
-                    "value": {
-                        "metadata": { "phone_number_id": "111111111111111" },
-                        "messages": [{ "from": "+919111111111", "id": "wamid.123", "type": "text", "text": { "body": "hi" } }]
-                    }
-                }
-            ]
-        }
-    ]
-}
-```
-
-Effect:
-
--   Persists inbound `Message` with `direction: IN`.
--   Upserts `Customer`.
--   **Auto-reply**: enqueues an outbound message with body:
-    ```
-    thanks for reaching us
-    - team <tenant.name>
-    ```
-    The auto-reply uses idempotency key `auto-reply:<inbound-wa-message-id>`.
-
-How to compute signature (if APP_SECRET set):
-
--   Use exact raw JSON body and compute HMAC-SHA256 with `APP_SECRET` and prefix with `sha256=`. Examples with `openssl` or Node.js are in the earlier docs.
+-   For quick integration tests, run Mongo in Docker and point `MONGO_URI` to it, or use `mongodb-memory-server`.
 
 ---
 
-## Data model (conceptual)
+## Observability & troubleshooting
 
-**Tenant**
+-   Expose health endpoint `/health` and worker stats
+-   Logs: structured JSON logs (pino/winston) and centralize in ELK/Datadog
+-   Metrics: instrument with Prometheus counters for jobs, retries, errors
+-   Alerts: on worker error spikes, zombie jobs, high retry rates, or failing webhook signature verifications
 
--   `_id`, `name`, `phoneNumberId` (unique), `wabaId`, `accessTokenEnc`, `status`, timestamps
+Common troubleshooting tips:
 
-**Customer**
-
--   `tenantId`, `waId` (E.164), `name`, `lastSeenAt`
-
-**Message**
-
--   `tenantId`, `conversationId?`, `direction` (`IN|OUT`), `waMessageId`, `body`, `idempotencyKey`, `status` (`queued|sent|delivered|read|failed`), timestamps
-
----
-
-## Reliability, queue & idempotency
-
--   Queue: BullMQ with queue name `whatsapp-send-queue`. Jobs: attempts=5, exponential backoff.
--   Idempotency: Mongo partial unique index on `(tenantId, idempotencyKey)` prevents duplicate sends per tenant. Pre-checks in controller avoid duplicates. Worker checks message.status before sending.
--   Mock tokens: tokens starting with `mock_` are simulated in worker (no external API call) — useful for dev.
-
----
-
-## Security & secrets
-
--   PoC: AES-256-GCM encryption using `MASTER_KEY` from `.env`. Not production-grade.
--   Prod: Use Cloud KMS / Secrets Manager, rotate secrets, apply least privilege.
--   Webhook signature: verify `X-Hub-Signature-256` as `sha256=HMAC(APP_SECRET, rawBody)`.
-
----
-
-## Troubleshooting & monitoring
-
--   Logs:
-    ```bash
-    docker-compose logs -f app
-    docker-compose logs -f worker
-    docker-compose logs -f mongo
-    docker-compose logs -f redis
-    ```
--   Mongo UI: `http://localhost:8081` (admin / pass)
--   If nodemon restarts too often, check for file-change loops or volume mounts.
--   If webhook 401: ensure signature computed on exact raw body.
+-   `401` on webhook → signature verification mismatch; ensure raw body capture and correct `APP_SECRET`
+-   Duplicate sends → missing idempotency key or incorrect index; check DB unique index
+-   Queue not processing → worker not connected to Redis, or connection config wrong
 
 ---
 
 ## Production considerations
 
--   Run workers in separate processes/hosts; autoscale independently.
--   Implement DLQ (dead-letter queue) for permanently failing jobs.
--   Add observability: metrics (Prometheus), centralized logs, tracing.
--   Enforce per-tenant rate limits; monitor noisy tenants.
--   Use Meta Embedded Signup for tenant onboarding (don't accept raw tokens).
+-   Use Cloud KMS (AWS KMS / GCP KMS / Azure Key Vault) for access token encryption and rotation
+-   Replace simulated `mock_` tokens with Meta Embedded Signup / OAuth flow for real onboarding
+-   Harden auth: use proper JWTs or mTLS for inter-service auth
+-   Run worker processes separately and autoscale based on queue depth
+-   Implement per-tenant rate limiting and throttling
+-   Add DLQ (dead-letter queue) for permanently failing jobs, with alerting and manual retry flow
+-   Harden schema validation and add API contract tests (contract tests)
+-   Use TLS, private networks, and least privilege IAM
 
 ---
 
-## Next steps (optional add-ons)
+## OpenAPI / Postman
 
--   Add Embedded Signup / OAuth server flow.
--   Integrate KMS (AWS/GCP) for token encryption at rest.
--   Add production Dockerfile and Kubernetes manifests / Helm chart.
--   Add tests (Jest + supertest) and CI pipeline.
--   Add Postman collection (I can generate it).
+-   Provide an `openapi.yaml` (skeleton) in `docs/` describing main endpoints:
+    -   `POST /tenants/register`
+    -   `POST /tenants/{tenantId}/templates`
+    -   `POST /tenants/{tenantId}/flows`
+    -   `POST /tenants/{tenantId}/send`
+    -   `POST /whatsapp/webhook`
+-   Export Postman collection for QA and integrators.
 
----
-
-## Contact / Help
-
-If you want, I can:
-
--   generate a ZIP of the project,
--   add Embedded Signup code,
--   integrate KMS example,
--   produce production manifests,
--   generate a Postman collection for quick import.
-
-Reply with which next step you want.
+If you want, I can generate a minimal OpenAPI skeleton and a Postman collection for import.
 
 ---
 
-# WhatsApp Multi-Tenant Backend (Node.js + MongoDB + Docker)
+## Contributing
 
-A development-friendly proof of concept for a **multi-tenant WhatsApp SaaS backend**.
-Each tenant connects their own WhatsApp number (via Cloud API), and messages from customers are handled automatically.
+Create `CONTRIBUTING.md` covering:
 
----
-
-## Quick Start (Backend)
-
-Prerequisites:
-
--   Docker & Docker Compose installed
--   Environment variables configured as per `.env` in project root
-
-Start the entire stack (recommended):
-
-```bash
-docker-compose up --build
-```
-
-This will build and start backend services, database, and optional worker services.
-
--   Backend API: `http://localhost:3000`
--   Mongo Express (if enabled): `http://localhost:8081`
+-   Repo layout and conventions
+-   Branching model: `main` protected; feature branches `feat/<desc>`
+-   Commit message style (Conventional Commits recommended)
+-   PR checklist:
+    -   Lint pass
+    -   Unit tests added/updated
+    -   Integration tests if applicable
+    -   Documentation updated (README / API examples)
+-   How to run tests locally
 
 ---
 
-## Frontend (Vite + React + MUI)
+## License
 
-A minimal React UI to test the backend:
-
--   Health check (`GET /health`)
--   Register tenant (`POST /tenants/register`)
--   Send message (`POST /tenants/:tenantId/send`)
-
-### Start (dev)
-
-**Recommended: start the whole stack** so that the Vite dev server inside Docker can proxy to the backend service name `app`:
-
-```bash
-docker-compose up --build
-```
-
-**Or** start backend and frontend together:
-
-```bash
-docker-compose up --build app frontend
-```
-
-Open the UI at: `http://localhost:5173`
-
-### Notes
-
--   The Vite dev server is configured to proxy `/api/*` to the internal Docker hostname `http://app:3000`. This means that when both frontend and backend run in the same Docker Compose network, there is **no CORS** friction.
--   Hot reload (HMR) is enabled and configured to work reliably inside containers by:
-    -   setting `CHOKIDAR_USEPOLLING: "true"` in the frontend service environment, and
-    -   enabling `watch.usePolling: true` in `vite.config.ts`.
--   If you run the frontend directly on your **host machine** (not inside Docker), the Vite proxy `http://app:3000` will not resolve. In that case set the API base to your host backend address.
-
-### Running frontend on host (outside Docker)
-
-1. Create a `.env` file inside `frontend/`:
-
-    ```
-    VITE_API_BASE=http://localhost:3000
-    ```
-
-2. From `frontend/` directory run:
-    ```bash
-    npm install
-    npm run dev
-    ```
-
-Now the frontend will call `http://localhost:3000` directly.
-
-### Vite proxy details (dev inside Docker)
-
-`vite.config.ts` contains:
-
-```ts
-server: {
-  proxy: {
-    '/api': {
-      target: 'http://app:3000',
-      changeOrigin: true,
-      rewrite: (path) => path.replace(/^\/api/, '')
-    }
-  }
-}
-```
-
-This maps browser requests to `http://localhost:5173/api/...` to the backend service `app:3000`.
-
----
-
-## Frontend file layout (created by the PoC)
-
-```
-frontend/
-├─ index.html
-├─ package.json
-├─ vite.config.ts
-├─ tsconfig.json
-├─ src/
-   ├─ main.tsx
-   ├─ App.tsx
-   ├─ lib/
-   │  └─ api.ts
-   └─ pages/
-      ├─ HealthCheck.tsx
-      ├─ TenantRegister.tsx
-      └─ SendMessage.tsx
-```
-
-### API helper (frontend/src/lib/api.ts)
-
-The frontend API client uses a Vite environment variable fallback:
-
-```ts
-const BASE = import.meta.env.VITE_API_BASE ?? "/api";
-```
-
--   When inside Docker Compose, `/api` is proxied to `http://app:3000`.
--   When running on host, set `VITE_API_BASE` to `http://localhost:3000`.
-
----
-
-## Troubleshooting
-
--   **Vite proxy returns connection errors**: likely the backend (`app`) is not yet ready. Start backend and frontend together with `docker-compose up --build` or ensure `app` is running on host if running frontend outside Docker.
--   **HMR not updating**: ensure the `frontend` volume is mounted (`./frontend:/usr/src/app`) and `CHOKIDAR_USEPOLLING` is set. Also ensure your editor writes files to the mounted path (some editors create temp files).
--   **Crypto/runtime errors**: ensure `MASTER_KEY` environment variable is set. Use the provided `src/utils/crypto.ts` which derives a 32-byte key using SHA-256 to tolerate varying key lengths.
-
----
-
-## Development Tips
-
--   To avoid installing node_modules on container start repeatedly, consider adding a simple `Dockerfile` for the frontend that runs `npm ci` during build. For pure dev, the current setup installs on container start for convenience.
--   If you want the frontend to wait until backend health is ready, you can add a small health-check loop in the frontend command; this is optional and mostly helpful when starting frontend alone.
--   Keep backend logs visible: `docker-compose logs -f app` is useful while developing.
+Add `LICENSE` file (e.g., MIT or another appropriate license). The repo currently does not include a license — choose one and add it.
 
 ---
 
 ## Contact / Next steps
 
-If you want, I can:
+If you'd like I can:
 
--   produce a `Dockerfile` for the frontend to speed up restarts,
--   add a small `wait-for-app.sh` wrapper so the frontend waits for backend health,
--   make `frontend` use a dedicated `Dockerfile` and multi-stage build.
+-   Produce `openapi.yaml` and Postman collection
+-   Create `.env.example` file and `Dockerfile.dev` / `docker-compose.yml` examples
+-   Generate `git diff` or patch files for README updates
+-   Add basic Jest unit tests and a CI workflow (GitHub Actions)
+
+Reply with which next step(s) you want me to produce and I will generate the files/patches accordingly.
