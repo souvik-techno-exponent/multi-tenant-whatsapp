@@ -67,6 +67,85 @@ messageSchema.index(
     { unique: true, partialFilterExpression: { idempotencyKey: { $exists: true } } }
 );
 
+/** Template schema (per-tenant) */
+const templateSchema = new Schema(
+    {
+        tenantId: { type: Schema.Types.ObjectId, required: true, index: true },
+        key: { type: String, required: true }, // e.g. "welcome", "otp", "fallback"
+        body: { type: String, required: true }, // e.g. "Hi {{name}}, your OTP is {{otp}}"
+        description: { type: String },
+        variables: [{ type: String }], // e.g. ["name","otp"]
+        isActive: { type: Boolean, default: true },
+        version: { type: Number, default: 1 },
+        createdAt: { type: Date, default: Date.now },
+        updatedAt: { type: Date, default: Date.now }
+    },
+    { versionKey: false }
+);
+templateSchema.index({ tenantId: 1, key: 1 }, { unique: true });
+templateSchema.pre("save", function (next) {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this as mongoose.Document & { updatedAt?: Date };
+    self.updatedAt = new Date();
+    next();
+});
+
+/** Flow schema (per-tenant) */
+const flowSchema = new Schema(
+    {
+        tenantId: { type: Schema.Types.ObjectId, required: true, unique: true, index: true },
+        // Simple DSL: array of rules: { when: { type: "regex"|"contains", value: string }, action: { replyTemplateKey, setState? } }
+        rules: [
+            {
+                when: {
+                    type: { type: String, enum: ["regex", "contains"], required: true },
+                    value: { type: String, required: true }
+                },
+                action: {
+                    replyTemplateKey: { type: String, required: true },
+                    setState: { type: String } // e.g. "awaiting_email"
+                }
+            }
+        ],
+        fallbackTemplateKey: { type: String }, // optional fallback
+        createdAt: { type: Date, default: Date.now },
+        updatedAt: { type: Date, default: Date.now }
+    },
+    { versionKey: false }
+);
+flowSchema.pre("save", function (next) {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this as mongoose.Document & { updatedAt?: Date };
+    self.updatedAt = new Date();
+    next();
+});
+
+/** ConversationState schema (per tenant, per customer) */
+const conversationStateSchema = new Schema(
+    {
+        tenantId: { type: Schema.Types.ObjectId, required: true, index: true },
+        customerWaId: { type: String, required: true }, // E.164
+        state: { type: String, default: "default" }, // free-form state label
+        updatedAt: { type: Date, default: Date.now }
+    },
+    { versionKey: false }
+);
+conversationStateSchema.index({ tenantId: 1, customerWaId: 1 }, { unique: true });
+conversationStateSchema.pre("save", function (next) {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this as mongoose.Document & { updatedAt?: Date };
+    self.updatedAt = new Date();
+    next();
+});
+
+export type TemplateDoc = InferSchemaType<typeof templateSchema> & { _id: Types.ObjectId };
+export type FlowDoc = InferSchemaType<typeof flowSchema> & { _id: Types.ObjectId };
+export type ConversationStateDoc = InferSchemaType<typeof conversationStateSchema> & { _id: Types.ObjectId };
+
+export const Template = model<TemplateDoc>("Template", templateSchema);
+export const Flow = model<FlowDoc>("Flow", flowSchema);
+export const ConversationState = model<ConversationStateDoc>("ConversationState", conversationStateSchema);
+
 // Types
 export type TenantDoc = InferSchemaType<typeof tenantSchema> & { _id: Types.ObjectId };
 export type CustomerDoc = InferSchemaType<typeof customerSchema> & { _id: Types.ObjectId };

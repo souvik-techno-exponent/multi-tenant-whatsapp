@@ -4,6 +4,7 @@ import { getTenantByPhoneNumberId } from "./tenantService";
 import { Customer, Message } from "./models";
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
+import { handleInbound } from "./conversationEngine";
 
 const APP_SECRET = process.env.APP_SECRET ?? "";
 
@@ -165,6 +166,33 @@ router.post("/", async (req: Request<unknown, unknown, WebhookBody>, res: Respon
                 status: "received",
                 createdAt: new Date()
               });
+              // === Flow engine: decide auto-reply by per-tenant rules/templates ===
+              const decision = await handleInbound({ tenantId: tenant._id.toString(), fromWaId: from, text });
+              if (decision?.replyText) {
+                const idempotencyKey = `flow-reply:${m.id}`;
+                const existing = await Message.findOne({ tenantId: tenant._id, idempotencyKey }).lean().exec();
+                if (!existing) {
+                  const outMsg = await Message.create({
+                    tenantId: tenant._id,
+                    direction: "OUT",
+                    body: decision.replyText,
+                    type: "text",
+                    idempotencyKey,
+                    status: "queued"
+                  });
+                  await sendQueue.add(
+                    "send",
+                    {
+                      tenantId: tenant._id.toString(),
+                      messageId: outMsg._id.toString(),
+                      to: from,
+                      text: decision.replyText,
+                      idempotencyKey
+                    },
+                    { attempts: 5, backoff: { type: "exponential", delay: 2000 } }
+                  );
+                }
+              }
 
 
               // === NEW: Auto-reply to customer on behalf of tenant ===
@@ -231,80 +259,3 @@ router.post("/", async (req: Request<unknown, unknown, WebhookBody>, res: Respon
     return res.sendStatus(500);
   }
 });
-
-
-
-/* 
-example payload format: MULTI-TENANT + MULTI-USER in single payload
-{
-  "object": "whatsapp_business_account",
-  "entry": [
-    {
-      "id": "whatsapp_business_account_1",
-      "changes": [
-        {
-          "value": {
-            "metadata": { "phone_number_id": "PNID_TENANT_A" },
-            "messages": [
-              {
-                "from": "+919100000001",
-                "id": "wamid.A.1",
-                "type": "text",
-                "text": { "body": "Hi Tenant A!" }
-              },
-              {
-                "from": "+919100000002",
-                "id": "wamid.A.2",
-                "type": "image",
-                "image": { "id": "MEDIA_A_1", "caption": "photo" }
-              }
-            ]
-          }
-        },
-        {
-          "value": {
-            "metadata": { "phone_number_id": "PNID_TENANT_B" },
-            "messages": [
-              {
-                "from": "+919200000001",
-                "id": "wamid.B.1",
-                "type": "text",
-                "text": { "body": "Order question" }
-              }
-            ],
-            "statuses": [
-              {
-                "id": "wamid.OUT_B_100",
-                "status": "delivered",
-                "recipient_id": "+919200000001"
-              }
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "id": "whatsapp_business_account_2",
-      "changes": [
-        {
-          "value": {
-            "metadata": { "phone_number_id": "PNID_TENANT_A" },
-            "messages": [
-              {
-                "from": "+919100000003",
-                "id": "wamid.A.3",
-                "type": "interactive",
-                "interactive": {
-                  "type": "button_reply",
-                  "button_reply": { "id": "btn_yes", "title": "Yes" }
-                }
-              }
-            ]
-          }
-        }
-      ]
-    }
-  ]
-}
-
-*/
