@@ -99,7 +99,9 @@ const flowSchema = new Schema(
         rules: [
             {
                 when: {
-                    type: { type: MatchType, required: true },
+                    // Mongoose needs the underlying constructor type, not a TS enum.
+                    // Constrain with enum to allowed values from MatchType.
+                    type: { type: String, enum: Object.values(MatchType), required: true },
                     value: { type: String, required: true }
                 },
                 action: {
@@ -138,6 +140,14 @@ conversationStateSchema.pre("save", function (next) {
     self.updatedAt = new Date();
     next();
 });
+
+
+// Strongly-typed rule shape for use with `.lean<...>()`
+export type FlowRule = {
+    when: { type: MatchType; value: string };
+    action: { replyTemplateKey: string; setState?: string };
+};
+export type FlowDocStrict = Omit<FlowDoc, "rules"> & { rules: FlowRule[] };
 
 export type TemplateDoc = InferSchemaType<typeof templateSchema> & { _id: Types.ObjectId };
 export type FlowDoc = InferSchemaType<typeof flowSchema> & { _id: Types.ObjectId };
