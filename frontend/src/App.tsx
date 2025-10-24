@@ -18,7 +18,15 @@ function a11yProps(index: number) {
     };
 }
 
-const TabPanel: React.FC<{ index: number; value: number }> = ({ index, value, children }) => {
+// Explicitly include `children` in props to avoid TS error:
+// "Property 'children' does not exist on type ...".
+type TabPanelProps = {
+    index: number;
+    value: number;
+    children?: React.ReactNode;
+};
+
+const TabPanel = ({ index, value, children }: TabPanelProps) => {
     return (
         <div
             role="tabpanel"
