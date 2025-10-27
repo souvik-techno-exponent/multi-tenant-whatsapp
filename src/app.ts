@@ -6,6 +6,7 @@ import { enqueueSend } from "./sendController";
 import { registerTenant, RegisterTenantInput } from "./tenantService";
 import { upsertTemplate, listTemplates, getTemplate, renderTemplate } from "./templateService";
 import { Flow } from "./models";
+import { Types } from "mongoose";
 
 dotenv.config();
 
@@ -41,10 +42,18 @@ app.post("/tenants/register", async (req: Request<unknown, unknown, RegisterTena
 // Create/Update a template for a tenant
 app.post("/tenants/:tenantId/templates", async (req: Request, res: Response) => {
     const { tenantId } = req.params;
+    if (!Types.ObjectId.isValid(tenantId)) {
+        return res.status(400).json({ error: "invalid tenantId" });
+    }
     const { key, body, variables, description, isActive } = req.body || {};
     if (!key || !body) return res.status(400).json({ error: "key and body required" });
-    const doc = await upsertTemplate({ tenantId, key, body, variables, description, isActive });
-    return res.json({ ok: true, template: { id: doc._id, key: doc.key, version: doc.version } });
+    try {
+        const doc = await upsertTemplate({ tenantId, key, body, variables, description, isActive });
+        return res.json({ ok: true, template: { id: doc._id, key: doc.key, version: doc.version } });
+    } catch (err) {
+        console.error("templates route error", err);
+        return res.status(500).json({ error: "internal" });
+    }
 });
 
 // List active templates
@@ -70,14 +79,24 @@ app.post("/tenants/:tenantId/send/template", async (req: Request, res: Response)
 // Set/Get flow per-tenant
 app.post("/tenants/:tenantId/flows", async (req: Request, res: Response) => {
     const { tenantId } = req.params;
+    if (!Types.ObjectId.isValid(tenantId)) {
+        return res.status(400).json({ error: "invalid tenantId" });
+    }
     const { rules, fallbackTemplateKey } = req.body || {};
-    const doc = await Flow.findOneAndUpdate(
-        { tenantId },
-        { rules: Array.isArray(rules) ? rules : [], fallbackTemplateKey },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-    ).lean().exec();
-    return res.json({ ok: true, flow: doc });
+    try {
+        const doc = await Flow.findOneAndUpdate(
+            { tenantId },
+            { rules: Array.isArray(rules) ? rules : [], fallbackTemplateKey },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        ).lean().exec();
+        return res.json({ ok: true, flow: doc });
+    } catch (err) {
+        console.error("flows route error", err);
+        return res.status(500).json({ error: "internal" });
+    }
 });
+
+
 app.get("/tenants/:tenantId/flows", async (req: Request, res: Response) => {
     const { tenantId } = req.params;
     const doc = await Flow.findOne({ tenantId }).lean().exec();

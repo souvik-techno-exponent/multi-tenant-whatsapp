@@ -48,7 +48,15 @@ async function run(): Promise<void> {
     for (const t of templates) {
         await Template.findOneAndUpdate(
             { tenantId, key: t.key },
-            { body: t.body, variables: t.variables ?? [], description: t.description, isActive: true, $inc: { version: 1 } },
+            {
+                $set: {
+                    body: t.body,
+                    variables: t.variables ?? [],
+                    description: t.description,
+                    isActive: true,
+                },
+                $inc: { version: 1 },
+            },
             { upsert: true, new: true, setDefaultsOnInsert: true }
         ).exec();
     }

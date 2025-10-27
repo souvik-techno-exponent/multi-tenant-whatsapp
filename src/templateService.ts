@@ -23,17 +23,22 @@ export async function upsertTemplate(input: UpsertTemplateInput): Promise<Templa
     const { tenantId, key, body, variables, description, isActive } = input;
     const inferred = variables ?? extractVarsFromBody(body);
     const update = {
-        body,
-        variables: inferred,
-        description,
-        isActive: isActive ?? true,
-        $inc: { version: 1 }
-    } as any;
+        $set: {
+            body,
+            variables: inferred,
+            description,
+            isActive: isActive ?? true,
+        },
+        $inc: { version: 1 },
+    };
+
     const doc = await Template.findOneAndUpdate(
         { tenantId, key } as FilterQuery<TemplateDoc>,
         update,
         { upsert: true, new: true, setDefaultsOnInsert: true }
     ).lean<TemplateDoc>().exec();
+
+    if (!doc) throw new Error("Failed to upsert template");
     return doc;
 }
 
