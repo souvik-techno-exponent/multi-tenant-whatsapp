@@ -8,8 +8,7 @@
         "start": "node dist/index.js",
         "worker:dev": "ts-node-dev --respawn --transpile-only --poll --watch src src/workerProcess.ts",
         "build": "tsc -p tsconfig.json",
-        "lint": "echo \"(add linter if you want)\"",
-        "seed": "ts-node-dev --transpile-only src/seed.ts"
+        "lint": "echo \"(add linter if you want)\""
     },
     "dependencies": {
         "axios": "^1.7.7",
