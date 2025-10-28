@@ -25,7 +25,7 @@ try {
         {
             files: ["**/*.ts", "**/*.js"],
             languageOptions: {
-                parser: require.resolve("@typescript-eslint/parser"),
+                parser: require("@typescript-eslint/parser"),
             },
             plugins: {
                 "@typescript-eslint": require("@typescript-eslint/eslint-plugin"),

@@ -32,7 +32,8 @@ module.exports = [
             ecmaFeatures: { jsx: true },
 
             // parser is provided by @typescript-eslint/parser
-            parser: require.resolve("@typescript-eslint/parser"),
+            parser: require("@typescript-eslint/parser"),
+            
             parserOptions: {
                 // If you use project-based type-check linting (recommended for some rules),
                 // add `project: "./tsconfig.json"` and enable typed linting separately.
