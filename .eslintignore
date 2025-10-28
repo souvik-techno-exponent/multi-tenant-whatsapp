@@ -1,7 +1,0 @@
-node_modules/
-dist/
-build/
-coverage/
-coverage-report/
-reports/
-*.d.ts
