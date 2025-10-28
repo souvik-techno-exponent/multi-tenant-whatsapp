@@ -1,28 +1,35 @@
 {
-  "name": "poc-whatsapp-frontend",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0 --port 5173",
-    "lint": "echo \"(add eslint if you want)\""
-  },
-  "dependencies": {
-    "@emotion/react": "^11.13.0",
-    "@emotion/styled": "^11.13.0",
-    "@mui/icons-material": "^5.15.20",
-    "@mui/material": "^5.15.20",
-    "axios": "^1.7.7",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
-  "devDependencies": {
-    "@types/react": "^18.3.5",
-    "@types/react-dom": "^18.3.0",
-    "typescript": "^5.5.4",
-    "vite": "^5.4.1",
-    "@vitejs/plugin-react": "^4.0.0"
-  }
+    "name": "poc-whatsapp-frontend",
+    "private": true,
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview --host 0.0.0.0 --port 5173",
+        "lint": "eslint . --ext .ts,.tsx --max-warnings=0",
+        "lint:fix": "eslint . --ext .ts,.tsx --fix",
+        "typecheck": "tsc -p tsconfig.json --noEmit"
+    },
+    "dependencies": {
+        "@emotion/react": "^11.13.0",
+        "@emotion/styled": "^11.13.0",
+        "@mui/icons-material": "^5.15.20",
+        "@mui/material": "^5.15.20",
+        "axios": "^1.7.7",
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1"
+    },
+    "devDependencies": {
+        "@types/react": "^18.3.5",
+        "@types/react-dom": "^18.3.0",
+        "@typescript-eslint/eslint-plugin": "^8.46.2",
+        "@typescript-eslint/parser": "^8.46.2",
+        "@vitejs/plugin-react": "^4.0.0",
+        "eslint": "^9.38.0",
+        "eslint-plugin-react": "^7.37.5",
+        "eslint-plugin-react-hooks": "^7.0.1",
+        "typescript": "^5.5.4",
+        "vite": "^5.4.1"
+    }
 }

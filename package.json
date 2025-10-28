@@ -8,7 +8,15 @@
         "start": "node dist/index.js",
         "worker:dev": "ts-node-dev --respawn --transpile-only --poll --watch src src/workerProcess.ts",
         "build": "tsc -p tsconfig.json",
-        "lint": "echo \"(add linter if you want)\""
+        "lint:backend": "eslint . --ext .ts --max-warnings=0",
+        "lint:frontend": "cd frontend && eslint . --ext .ts,.tsx --max-warnings=0",
+        "lint": "npm run lint:backend && npm run lint:frontend",
+        "lint:fix:backend": "eslint . --ext .ts --fix",
+        "lint:fix:frontend": "cd frontend && eslint . --ext .ts,.tsx --fix",
+        "typecheck:backend": "tsc -p tsconfig.json --noEmit",
+        "typecheck:frontend": "cd frontend && tsc -p tsconfig.json --noEmit",
+        "typecheck": "npm run typecheck:backend && npm run typecheck:frontend",
+        "lint:fix:all": "npm run lint:fix:backend && npm run lint:fix:frontend && npm run typecheck"
     },
     "dependencies": {
         "axios": "^1.7.7",
@@ -23,6 +31,9 @@
         "@types/express": "^4.17.21",
         "@types/node": "^20.14.11",
         "@types/uuid": "^9.0.7",
+        "@typescript-eslint/eslint-plugin": "^8.46.2",
+        "@typescript-eslint/parser": "^8.46.2",
+        "eslint": "^9.38.0",
         "ts-node-dev": "^2.0.0",
         "typescript": "^5.5.4"
     }
