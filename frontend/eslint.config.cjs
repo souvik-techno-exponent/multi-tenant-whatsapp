@@ -20,16 +20,16 @@ module.exports = [
     // 2) If ESLint ever touches a config file, treat it as Node+CJS and silence TS-specific complaints
     {
         files: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"],
+        // NOTE: `ecmaFeatures` must be inside parserOptions for flat configs — not at top-level languageOptions
         languageOptions: {
             ecmaVersion: 2022,
             sourceType: "module",
-            ecmaFeatures: { jsx: true }, // ⛔ ESLint 9 flat config does NOT allow this here
             parser: require("@typescript-eslint/parser"),
-
             parserOptions: {
                 ecmaVersion: 2022,
                 sourceType: "module",
                 project: undefined,
+                ecmaFeatures: { jsx: true }, // moved here
             },
         },
         rules: {
@@ -54,17 +54,15 @@ module.exports = [
         languageOptions: {
             ecmaVersion: 2022,
             sourceType: "module",
-            ecmaFeatures: { jsx: true },
-
             // parser is provided by @typescript-eslint/parser
             parser: require("@typescript-eslint/parser"),
-
             parserOptions: {
                 // If you use project-based type-check linting (recommended for some rules),
                 // add `project: "./tsconfig.json"` and enable typed linting separately.
                 ecmaVersion: 2022,
                 sourceType: "module",
                 project: undefined, // set to "./tsconfig.json" only if you want typed rules
+                ecmaFeatures: { jsx: true }, // moved here
             },
         },
         plugins: {
