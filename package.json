@@ -16,7 +16,7 @@
         "typecheck:backend": "tsc -p tsconfig.json --noEmit",
         "typecheck:frontend": "cd frontend && tsc -p tsconfig.json --noEmit",
         "typecheck": "npm run typecheck:backend && npm run typecheck:frontend",
-        "lint:fix:all": "npm run lint:fix:backend && npm run lint:fix:frontend && npm run typecheck"
+        "lint:fix:all": "npm run typecheck && npm run lint:fix:backend && npm run lint:fix:frontend"
     },
     "dependencies": {
         "axios": "^1.7.7",
