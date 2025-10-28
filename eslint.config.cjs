@@ -1,7 +1,14 @@
-// eslint.config.cjs
 try {
+    const path = require("path");
     const { FlatCompat } = require("@eslint/eslintrc");
-    const compat = new FlatCompat({});
+    // provide the built-in eslint configs so FlatCompat can translate extends like "eslint:recommended"
+    // @eslint/js exposes the builtin configs (recommended / all)
+    const js = require("@eslint/js");
+    const compat = new FlatCompat({
+        baseDirectory: __dirname,
+        recommendedConfig: js.configs.recommended,
+        // allConfig: js.configs.all, // optional - only needed if you extend "eslint:all"
+    });
 
     module.exports = [
         // reuse your existing extends via compat
