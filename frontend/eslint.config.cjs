@@ -4,6 +4,7 @@ const path = require("path");
 const { FlatCompat } = require("@eslint/eslintrc");
 // ensure we can translate "eslint:recommended" etc.
 const js = require("@eslint/js");
+
 const compat = new FlatCompat({
     baseDirectory: __dirname,
     recommendedConfig: js.configs.recommended,
@@ -23,7 +24,7 @@ module.exports = [
         "plugin:jsx-a11y/recommended"
     ),
 
-    // project-specific overrides (TS / TSX)
+    // project-specific overrides (TS / TSX / JS / JSX)
     {
         files: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"],
         languageOptions: {
@@ -33,7 +34,7 @@ module.exports = [
 
             // parser is provided by @typescript-eslint/parser
             parser: require("@typescript-eslint/parser"),
-            
+
             parserOptions: {
                 // If you use project-based type-check linting (recommended for some rules),
                 // add `project: "./tsconfig.json"` and enable typed linting separately.
@@ -53,7 +54,8 @@ module.exports = [
             "react/react-in-jsx-scope": "off",
             "no-unused-vars": "off",
             "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
-            "@typescript-eslint/no-explicit-any": "warn",
+            // Allow explicit `any`
+            "@typescript-eslint/no-explicit-any": "off",
             "react/prop-types": "off",
         },
         settings: {
