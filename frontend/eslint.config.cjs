@@ -19,14 +19,17 @@ module.exports = [
 
     // 2) If ESLint ever touches a config file, treat it as Node+CJS and silence TS-specific complaints
     {
-        files: ["**/eslint.config.*"],
+        files: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"],
         languageOptions: {
             ecmaVersion: 2022,
-            sourceType: "commonjs",
-            globals: {
-                require: "readonly",
-                module: "readonly",
-                __dirname: "readonly",
+            sourceType: "module",
+            ecmaFeatures: { jsx: true }, // ⛔ ESLint 9 flat config does NOT allow this here
+            parser: require("@typescript-eslint/parser"),
+
+            parserOptions: {
+                ecmaVersion: 2022,
+                sourceType: "module",
+                project: undefined,
             },
         },
         rules: {
