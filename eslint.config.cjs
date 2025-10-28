@@ -1,20 +1,20 @@
+// eslint.config.cjs
 try {
-    // Prefer using FlatCompat if available (clean migration path).
     const { FlatCompat } = require("@eslint/eslintrc");
     const compat = new FlatCompat({});
 
     module.exports = [
-        // Use your existing shared/extendable configs via compat.extends()
+        // reuse your existing extends via compat
         ...compat.extends(
             "eslint:recommended",
             "plugin:@typescript-eslint/recommended"
-            // frontend-specific react rules are included in frontend/.eslintrc.cjs
+            // add e.g. "plugin:react/recommended" for frontend, but frontend has its own file
         ),
 
-        // global ignores (migrates .eslintignore -> 'ignores' in flat config)
+        // global ignores
         { ignores: ["dist/", "node_modules/", "frontend/node_modules/", "build/"] },
 
-        // file-specific rules for TS backend (basic subset — ESLint will merge compat rules above)
+        // file-specific config for TS backend
         {
             files: ["**/*.ts", "**/*.js"],
             languageOptions: {
@@ -31,11 +31,8 @@ try {
             },
         },
     ];
-} catch (e) {
-    // Fallback: if @eslint/eslintrc isn't installed (FlatCompat not available),
-    // just export the legacy .eslintrc.cjs so ESLint finds a config file and works.
-    // This keeps behavior identical to your previous setup.
-    // NOTE: with this fallback you may still see a warning about .eslintignore if ESLint
-    // runs in flat-mode; in that case install @eslint/eslintrc or remove .eslintignore.
-    module.exports = require("./.eslintrc.cjs");
+} catch (err) {
+    // This should only run if @eslint/eslintrc isn't installed.
+    // If you want a hard error instead, throw here. If you keep a fallback, ensure it doesn't throw.
+    // module.exports = require("./.eslintrc.cjs");
 }
