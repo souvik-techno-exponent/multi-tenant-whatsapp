@@ -1,20 +1,20 @@
+// eslint.config.cjs
 try {
-    // Prefer using FlatCompat if available (clean migration path).
     const { FlatCompat } = require("@eslint/eslintrc");
     const compat = new FlatCompat({});
 
     module.exports = [
-        // Use your existing shared/extendable configs via compat.extends()
+        // reuse your existing extends via compat
         ...compat.extends(
             "eslint:recommended",
             "plugin:@typescript-eslint/recommended"
-            // frontend-specific react rules are included in frontend/.eslintrc.cjs
+            // add other extends you relied on, e.g. "plugin:react/recommended"
         ),
 
-        // global ignores (migrates .eslintignore -> 'ignores' in flat config)
+        // ignore patterns (equivalent to .eslintignore)
         { ignores: ["dist/", "node_modules/", "frontend/node_modules/", "build/"] },
 
-        // file-specific rules for TS backend (basic subset — ESLint will merge compat rules above)
+        // file-specific config for TS / JS
         {
             files: ["**/*.ts", "**/*.js"],
             languageOptions: {
@@ -31,11 +31,12 @@ try {
             },
         },
     ];
-} catch (e) {
-    // Fallback: if @eslint/eslintrc isn't installed (FlatCompat not available),
-    // just export the legacy .eslintrc.cjs so ESLint finds a config file and works.
-    // This keeps behavior identical to your previous setup.
-    // NOTE: with this fallback you may still see a warning about .eslintignore if ESLint
-    // runs in flat-mode; in that case install @eslint/eslintrc or remove .eslintignore.
-    module.exports = require("./.eslintrc.cjs");
+} catch (err) {
+    // Don't export a legacy config object from a flat config file — that causes the "root" error.
+    // Fail loudly with an actionable message so contributors know how to fix it.
+    throw new Error(
+        "eslint.config.cjs failed to initialize. Install devDeps: " +
+            "`npm i -D @eslint/eslintrc @typescript-eslint/parser @typescript-eslint/eslint-plugin` " +
+            "or revert to legacy .eslintrc.* configs."
+    );
 }
