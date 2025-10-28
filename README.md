@@ -569,3 +569,25 @@ If you'd like I can:
 -   Add basic Jest unit tests and a CI workflow (GitHub Actions)
 
 Reply with which next step(s) you want me to produce and I will generate the files/patches accordingly.
+
+## Run ESLint fixes inside Docker
+
+Use the following commands to run the project's linting (and autofix) inside the project's containers:
+
+```bash
+# run as a one-off container (build images first if needed)
+docker compose run --rm app npm run lint:fix:all
+
+# run inside a running app service (start services first)
+docker compose exec app sh -c "npm run lint:fix:all"
+
+# run using docker exec against a running container named `poc_app`
+docker exec -it poc_app sh -c "npm run lint:fix:all"
+```
+
+**Notes / best practices**
+
+-   These commands use Docker Compose v2 (`docker compose`). If your system only has the legacy CLI, replace `docker compose` with `docker-compose`.
+-   `eslint --fix` will modify files on the host because the repo is mounted into the container. Always create a branch or stash changes before running autofix so you can review fixes in version control.
+-   Ensure dependencies are installed in the image (or run `npm ci` inside the container) before running lint. Consider adding a lightweight `lint` image/target in CI to keep environments consistent.
+-   If you want to avoid linting config files (like `eslint.config.cjs`), add them to `.eslintignore` or adjust your lint script to limit its scope (e.g. `eslint src --ext .ts --fix`).
