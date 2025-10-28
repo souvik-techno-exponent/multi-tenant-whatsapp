@@ -1,65 +1,262 @@
+// src/conversationEngine.ts
+
 import { renderTemplate } from "./templateService";
 import { MatchType, toMatchType } from "./conversation/types";
-import { Flow, ConversationState, Template, FlowDocStrict } from "./models";
+import { Flow, ConversationState, Template } from "./models";
 
-export async function handleInbound(opts: {
+/**
+ * Describes one rule inside the tenant flow document.
+ * Matches incoming message (equals / contains / regex),
+ * and triggers a reply template + optional state change.
+ */
+interface FlowRule {
+    when?: {
+        type?: string;   // "equals" | "contains" | "regex"
+        value?: string;  // the pattern or text to match
+    };
+    action?: {
+        replyTemplateKey?: string; // which template to send
+        setState?: string;         // optional new conversation state
+    };
+}
+
+/**
+ * Shape of Flow document we care about.
+ */
+interface FlowDoc {
+    rules?: FlowRule[];
+    fallbackTemplateKey?: string;
+}
+
+/**
+ * Buttons we might send back to WhatsApp in an interactive message.
+ */
+interface OutButton {
+    id: string;
+    title: string;
+}
+
+/**
+ * What the engine returns to the webhook so it can enqueue a send job.
+ */
+export interface InboundDecision {
+    replyKind?: "text" | "interactive_button";
+    replyText?: string;
+    buttons?: OutButton[];
+}
+
+/**
+ * Handle inbound WA messages with optional button payload.
+ * Priority:
+ *   1. If payloadId exists, branch based on lastTemplateKey + chosen button.
+ *   2. Else run keyword/regex flow rules.
+ *   3. Else fallbackTemplateKey.
+ */
+export async function handleInboundAdvanced(opts: {
     tenantId: string;
-    fromWaId: string;   // E.164 of customer
-    text?: string | null;
-}): Promise<{ replyText?: string } | null> {
-    const { tenantId, fromWaId, text } = opts;
-    const flow = await Flow.findOne({ tenantId }).lean<FlowDocStrict>().exec();
-    if (!flow) return null;
-    const msg = (text ?? "").trim();
+    fromWaId: string;          // user's WhatsApp number (customer waId)
+    text?: string | null;      // free text or button title
+    payloadId?: string | null; // button payload id from WhatsApp interactive reply
+}): Promise<InboundDecision | null> {
+    const { tenantId, fromWaId, text, payloadId } = opts;
 
-    // Ensure a state doc exists
+    // ensure we have a conversation state doc
     const stateDoc = await ConversationState.findOneAndUpdate(
         { tenantId, customerWaId: fromWaId },
         { $setOnInsert: { state: "default" } },
         { upsert: true, new: true }
     ).exec();
 
-    // Iterate flow rules in order
-    for (const r of flow.rules ?? []) {
-        // be defensive even though FlowDocStrict marks them required
-        const type = toMatchType((r as any)?.when?.type as string | undefined);
-        const value = r?.when?.value ?? "";
-        let matched = false;
-        if (!value) continue;
-        if (type === MatchType.Contains) {
-            matched = !!msg && msg.toLowerCase().includes(value.toLowerCase());
-        } else if (type === MatchType.Regex) {
-            try {
-                const re = new RegExp(value, "i");
-                matched = re.test(msg);
-            } catch {
-                // ignore bad regex
+    //
+    // 1. BUTTON BRANCH HANDLING
+    //
+    if (payloadId) {
+        const lastKey = stateDoc.lastTemplateKey;
+        if (lastKey) {
+            const prevTmpl = await Template.findOne({
+                tenantId,
+                key: lastKey,
+                isActive: true
+            })
+                .lean()
+                .exec();
+
+            if (prevTmpl && prevTmpl.kind === "interactive_button") {
+                // find which button was clicked
+                const chosenButton = (prevTmpl.buttons ?? []).find(
+                    (b) => b.id === payloadId
+                );
+
+                if (chosenButton && chosenButton.nextTemplateKey) {
+                    const nextTmpl = await Template.findOne({
+                        tenantId,
+                        key: chosenButton.nextTemplateKey,
+                        isActive: true
+                    })
+                        .lean()
+                        .exec();
+
+                    if (nextTmpl) {
+                        // optional state transition
+                        if (chosenButton.nextState) {
+                            stateDoc.state = chosenButton.nextState;
+                        }
+
+                        // remember which template we just sent
+                        stateDoc.lastTemplateKey = nextTmpl.key;
+                        await stateDoc.save();
+
+                        if (nextTmpl.kind === "interactive_button") {
+                            return {
+                                replyKind: "interactive_button",
+                                replyText: renderTemplate(nextTmpl.body),
+                                buttons: (nextTmpl.buttons ?? []).map(
+                                    (b: { id: string; title: string }) => ({
+                                        id: b.id,
+                                        title: b.title,
+                                    })
+                                ),
+                            };
+                        }
+
+                        // normal text response
+                        return {
+                            replyKind: "text",
+                            replyText: renderTemplate(nextTmpl.body),
+                        };
+                    }
+                }
             }
-        } else if (type === MatchType.Equals) {
-            matched = msg.toLowerCase() === value.toLowerCase();
         }
-        if (!matched) continue;
+        // if payloadId didn't map, fall through to normal flow
+    }
 
-        const tKey = r?.action?.replyTemplateKey;
-        if (!tKey) continue;
-        const t = await Template.findOne({ tenantId, key: tKey, isActive: true }).lean().exec();
-        if (!t) continue;
+    //
+    // 2. KEYWORD / REGEX FLOW
+    //
+    const flowDoc = await Flow.findOne({ tenantId }).lean<FlowDoc>().exec();
+    const incomingMsg = (text ?? "").trim();
 
-        // Minimal example: no context vars yet; you can derive vars from msg/state later.
-        const replyText = renderTemplate(t.body);
+    if (flowDoc) {
+        const rules: FlowRule[] = flowDoc.rules ?? [];
 
-        // Optional state transition
-        if (r?.action?.setState) {
-            stateDoc.state = r.action.setState;
+        for (const rule of rules) {
+            const matchType: MatchType = toMatchType(rule.when?.type);
+            const matchValue: string = rule.when?.value ?? "";
+
+            if (!matchValue) {
+                continue;
+            }
+
+            let matched = false;
+
+            if (matchType === MatchType.Contains) {
+                matched =
+                    incomingMsg.length > 0 &&
+                    incomingMsg
+                        .toLowerCase()
+                        .includes(matchValue.toLowerCase());
+            } else if (matchType === MatchType.Regex) {
+                try {
+                    const re = new RegExp(matchValue, "i");
+                    matched = re.test(incomingMsg);
+                } catch {
+                    // bad regex -> treat as no match
+                    matched = false;
+                }
+            } else {
+                // Equals (default)
+                matched =
+                    incomingMsg.toLowerCase() === matchValue.toLowerCase();
+            }
+
+            if (!matched) {
+                continue;
+            }
+
+            // rule matched
+            const templateKey = rule.action?.replyTemplateKey;
+            if (!templateKey) {
+                continue;
+            }
+
+            const tmpl = await Template.findOne({
+                tenantId,
+                key: templateKey,
+                isActive: true
+            })
+                .lean()
+                .exec();
+
+            if (!tmpl) {
+                continue;
+            }
+
+            // optional state transition from rule
+            if (rule.action?.setState) {
+                stateDoc.state = rule.action.setState;
+            }
+
+            // track last template for future button clicks
+            stateDoc.lastTemplateKey = tmpl.key;
             await stateDoc.save();
+
+            if (tmpl.kind === "interactive_button") {
+                return {
+                    replyKind: "interactive_button",
+                    replyText: renderTemplate(tmpl.body),
+                    buttons: (tmpl.buttons ?? []).map(
+                        (b: { id: string; title: string }) => ({
+                            id: b.id,
+                            title: b.title,
+                        })
+                    ),
+                };
+            }
+
+            return {
+                replyKind: "text",
+                replyText: renderTemplate(tmpl.body),
+            };
         }
-        return { replyText };
+
+        //
+        // 3. FALLBACK
+        //
+        if (flowDoc.fallbackTemplateKey) {
+            const fbTmpl = await Template.findOne({
+                tenantId,
+                key: flowDoc.fallbackTemplateKey,
+                isActive: true
+            })
+                .lean()
+                .exec();
+
+            if (fbTmpl) {
+                stateDoc.lastTemplateKey = fbTmpl.key;
+                await stateDoc.save();
+
+                if (fbTmpl.kind === "interactive_button") {
+                    return {
+                        replyKind: "interactive_button",
+                        replyText: renderTemplate(fbTmpl.body),
+                        buttons: (fbTmpl.buttons ?? []).map(
+                            (b: { id: string; title: string }) => ({
+                                id: b.id,
+                                title: b.title,
+                            })
+                        ),
+                    };
+                }
+
+                return {
+                    replyKind: "text",
+                    replyText: renderTemplate(fbTmpl.body),
+                };
+            }
+        }
     }
 
-    // fallback
-    if (flow.fallbackTemplateKey) {
-        const ft = await Template.findOne({ tenantId, key: flow.fallbackTemplateKey, isActive: true }).lean().exec();
-        if (ft) return { replyText: renderTemplate(ft.body) };
-    }
+    // no reply
     return null;
 }

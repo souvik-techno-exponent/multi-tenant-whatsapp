@@ -12,6 +12,7 @@ export async function connectWithRetry(retries = 10, delayMs = 2000): Promise<vo
             return;
         } catch (err) {
             console.warn(`Mongo connect attempt ${i + 1} failed - retrying in ${delayMs}ms`);
+            console.log(err)
             await new Promise((r) => setTimeout(r, delayMs));
         }
     }

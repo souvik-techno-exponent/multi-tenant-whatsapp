@@ -1,5 +1,5 @@
-import { FilterQuery } from "mongoose";
 import { Template, TemplateDoc } from "./models";
+import { FilterQuery } from "mongoose";
 
 export interface UpsertTemplateInput {
     tenantId: string;
@@ -8,6 +8,13 @@ export interface UpsertTemplateInput {
     variables?: string[];
     description?: string;
     isActive?: boolean;
+    kind?: "text" | "interactive_button";
+    buttons?: {
+        id: string;
+        title: string;
+        nextTemplateKey?: string;
+        nextState?: string;
+    }[];
 }
 
 function extractVarsFromBody(s: string): string[] {
@@ -28,6 +35,8 @@ export async function upsertTemplate(input: UpsertTemplateInput): Promise<Templa
             variables: inferred,
             description,
             isActive: isActive ?? true,
+            kind: input.kind ?? "text",
+            buttons: input.buttons ?? [],
         },
         $inc: { version: 1 },
     };

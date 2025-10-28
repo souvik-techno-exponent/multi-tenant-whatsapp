@@ -1,261 +1,341 @@
+// src/webhook.ts
+//
+// Handles incoming WhatsApp webhook events.
+// - GET /whatsapp/webhook  -> Meta verification (hub.challenge)
+// - POST /whatsapp/webhook -> incoming messages, status updates
+//
+// Flow on inbound message:
+//   1. Identify tenant by phone_number_id
+//   2. Save inbound Message in DB
+//   3. Run handleInboundAdvanced(...) to decide reply
+//   4. Create outbound Message in DB
+//   5. Enqueue a BullMQ job to actually send WhatsApp reply
+//
+// Replies can be plain text OR interactive button menus.
+// Button clicks come back as interactive payloads, and we branch
+// conversation state based on which button was pressed.
+
 import express, { Request, Response } from "express";
-import crypto from "crypto";
-import { getTenantByPhoneNumberId } from "./tenantService";
-import { Customer, Message } from "./models";
+import { Message, Tenant } from "./models";
+import { handleInboundAdvanced } from "./conversationEngine";
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
-import { handleInbound } from "./conversationEngine";
-
-const APP_SECRET = process.env.APP_SECRET ?? "";
 
 export const router = express.Router();
 
-router.get("/", (req: Request, res: Response) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-  if (mode === "subscribe" && token === process.env.VERIFY_TOKEN) {
-    return res.status(200).send(String(challenge ?? ""));
-  }
-  return res.sendStatus(403);
-});
+// ----------- WhatsApp inbound message typing / parsing -----------
 
-// Minimal types for webhook payload structure we care about
-interface WebhookMessage {
-  from: string;
-  id: string;
+interface InboundWAMessage {
+  from?: string; // user's WhatsApp number (E.164)
+  id?: string;
   type?: string;
-  text?: { body?: string };
-  // other fields (image, interactive, location, etc.) may exist
-  [key: string]: any;
+  timestamp?: string;
+
+  text?: {
+    body?: string;
+  };
+
+  // legacy style button replies
+  button?: {
+    payload?: string;
+    text?: string;
+  };
+
+  // interactive replies (recommended by WhatsApp Cloud API)
+  interactive?: {
+    type?: "button_reply" | "list_reply";
+    button_reply?: {
+      id?: string; // stable payload id we configured
+      title?: string;
+    };
+    list_reply?: {
+      id?: string;
+      title?: string;
+      description?: string;
+    };
+  };
 }
 
-interface WebhookStatus {
-  id: string;
-  status?: string;
-  [key: string]: any;
+/**
+ * extractInboundContent()
+ *
+ * Normalizes different WhatsApp message formats into a consistent shape:
+ * - textBody: what the user "said" / clicked label
+ * - payloadId: which reply option was clicked (used for branching)
+ */
+function extractInboundContent(m: InboundWAMessage): {
+  fromWaId: string | null;
+  textBody: string | null;
+  payloadId: string | null;
+  waMessageId: string | null;
+  messageType: string | null;
+} {
+  const fromWaId = m.from ?? null;
+  const waMessageId = m.id ?? null;
+  const messageType = m.type ?? null;
+
+  // free text
+  const textBodyRaw = m.text?.body ?? null;
+
+  // legacy non-interactive buttons
+  const legacyBtnPayload = m.button?.payload ?? null;
+  const legacyBtnText = m.button?.text ?? null;
+
+  // interactive button / list replies
+  const interactivePayload =
+    m.interactive?.button_reply?.id ??
+    m.interactive?.list_reply?.id ??
+    null;
+
+  const interactiveTitle =
+    m.interactive?.button_reply?.title ??
+    m.interactive?.list_reply?.title ??
+    null;
+
+  // payload the bot should branch on
+  const payloadId = interactivePayload ?? legacyBtnPayload ?? null;
+
+  // best-effort human-visible text for logging / transcript
+  const textBody = interactiveTitle ?? legacyBtnText ?? textBodyRaw ?? null;
+
+  return {
+    fromWaId,
+    textBody,
+    payloadId,
+    waMessageId,
+    messageType,
+  };
 }
 
-interface WebhookValue {
-  metadata?: { phone_number_id?: string };
-  messages?: WebhookMessage[];
-  statuses?: WebhookStatus[];
-  [key: string]: any;
-}
+// ----------- BullMQ job payload that worker.ts will consume -----------
 
-interface WebhookChange {
-  value?: WebhookValue;
-  [key: string]: any;
-}
-
-interface WebhookEntry {
-  changes?: WebhookChange[];
-  [key: string]: any;
-}
-
-interface WebhookBody {
-  entry?: WebhookEntry[];
-  [key: string]: any;
-}
-
-// --- send queue (same shape the worker expects) ---
-interface SendJobData {
+export interface SendJobData {
   tenantId: string;
   messageId: string;
   to: string;
-  text: string;
+  content: {
+    kind: "text" | "interactive_button";
+    text?: string;
+    buttons?: { id: string; title: string }[];
+  };
   idempotencyKey?: string;
 }
+
+// Redis connection for queue producer
 const connection = new IORedis({
   host: process.env.REDIS_HOST || "127.0.0.1",
-  port: Number(process.env.REDIS_PORT ?? 6379)
+  port: parseInt(process.env.REDIS_PORT ?? "6379", 10),
+  maxRetriesPerRequest: null,
 });
-const sendQueue = new Queue<SendJobData>("whatsapp-send-queue", { connection });
 
+// Producer queue (consumer lives in worker.ts / startWorker())
+const sendQueue = new Queue<SendJobData>("whatsapp-send-queue", {
+  connection,
+});
 
-router.post("/", async (req: Request<unknown, unknown, WebhookBody>, res: Response) => {
-  try {
-    // 1) Signature verification (if APP_SECRET configured)
-    const sig = (req.get("x-hub-signature-256") || "").trim();
-    if (APP_SECRET) {
-      const raw = req.rawBody ?? Buffer.from("");
-      const expected = "sha256=" + crypto.createHmac("sha256", APP_SECRET).update(raw).digest("hex");
-      const sigBuf = Buffer.from(sig);
-      const expBuf = Buffer.from(expected);
-      console.log({ expected, sig }, '======================')
-      /*  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
-         console.warn("Invalid signature on webhook");
-         return res.sendStatus(401);
-       } */
+// ---------------------------------------------------------
+// GET /whatsapp/webhook
+// Meta will call this once during setup to verify the token.
+// ---------------------------------------------------------
+router.get("/whatsapp/webhook", (req: Request, res: Response): void => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
 
-    } else {
-      console.warn("APP_SECRET not set; skipping signature verification (POC)");
-    }
+  if (
+    mode === "subscribe" &&
+    token === process.env.WHATSAPP_VERIFY_TOKEN
+  ) {
+    res.status(200).send(challenge);
+  } else {
+    res.sendStatus(403);
+  }
+});
 
-    // 2) Validate body
-    const body = req.body as WebhookBody;
-    if (!body?.entry || !Array.isArray(body.entry) || body.entry.length === 0) {
-      // nothing to do
-      return res.sendStatus(200);
-    }
+// ---------------------------------------------------------
+// POST /whatsapp/webhook
+//
+// Called every time we get:
+//   - a new user message
+//   - a button click
+//   - a delivery/read status update
+//
+// This route:
+//   - maps phone_number_id -> tenant
+//   - persists inbound message
+//   - asks conversationEngine what to reply
+//   - enqueues outbound job for worker
+//   - updates message status changes
+// ---------------------------------------------------------
+router.post(
+  "/whatsapp/webhook",
+  async (req: Request, res: Response): Promise<void> => {
+    // The WhatsApp payload is shaped as entry[] -> changes[]
+    const entryArr = Array.isArray(req.body?.entry) ? req.body.entry : [];
 
-    // 3) Iterate all entries and changes (supports multi-tenant + multi-user in one payload)
-    for (const entry of body.entry) {
-      if (!entry?.changes || !Array.isArray(entry.changes)) continue;
+    for (const entry of entryArr) {
+      const changeArr = Array.isArray(entry?.changes)
+        ? entry.changes
+        : [];
 
-      for (const change of entry.changes) {
-        const value = change?.value as WebhookValue | undefined;
-        if (!value) continue;
+      for (const change of changeArr) {
+        const value = change?.value;
+        const phoneNumberId: string | undefined =
+          value?.metadata?.phone_number_id;
 
-        const phoneNumberId = value?.metadata?.phone_number_id;
-        if (!phoneNumberId) {
-          console.warn("webhook change without phone_number_id metadata, skipping");
+        // inbound messages (user -> us)
+        const messages: InboundWAMessage[] = Array.isArray(
+          value?.messages
+        )
+          ? (value.messages as InboundWAMessage[])
+          : [];
+
+        // No tenant or no inbound messages? nothing to do.
+        if (!phoneNumberId || messages.length === 0) {
           continue;
         }
 
-        // Resolve tenant by phone_number_id
-        let tenant;
-        try {
-          tenant = await getTenantByPhoneNumberId(phoneNumberId);
-        } catch (err) {
-          console.error("error fetching tenant for phoneNumberId", phoneNumberId, err);
-          // Skip this change (do not block other changes)
+        // Identify tenant by phone_number_id
+        const tenantDoc = await Tenant.findOne({
+          phoneNumberId,
+        })
+          .lean()
+          .exec();
+
+        if (!tenantDoc) {
+          // Unknown number (not mapped to any tenant in DB)
           continue;
         }
 
-        if (!tenant) {
-          console.warn("No tenant for phone number id:", phoneNumberId);
-          // Optionally: persist raw event to 'unmapped' collection for later manual mapping
-          continue;
-        }
+        // Handle each message from that tenant
+        for (const waMsg of messages) {
+          try {
+            const {
+              fromWaId,
+              textBody,
+              payloadId,
+              waMessageId,
+              messageType,
+            } = extractInboundContent(waMsg);
 
-        // Process messages array (could be multiple messages from multiple users)
-        const messages = value?.messages ?? [];
-        if (Array.isArray(messages) && messages.length > 0) {
-          // process messages in parallel per-change but catch errors per-item
-          await Promise.all(messages.map(async (m: WebhookMessage) => {
-            try {
-              const from = m.from;
-              const text = m.text?.body ?? null;
-              // NOTE: "from" = customer's WhatsApp number (E.164)
+            if (!fromWaId) {
+              continue;
+            }
 
-              // Upsert customer (atomic single-doc upsert)
-              await Customer.findOneAndUpdate(
-                { tenantId: tenant._id, waId: from },
-                { $set: { lastSeenAt: new Date() } },
-                { upsert: true, new: true }
-              ).exec();
+            // 1. Persist inbound message record
+            const createdMsg = await Message.create({
+              tenantId: tenantDoc._id,
+              direction: "IN",
+              body: textBody ?? payloadId ?? "",
+              type: payloadId
+                ? "button_reply"
+                : (messageType ?? "text"),
+              waMessageId,
+              status: "received",
+              createdAt: new Date(),
+            });
 
-              // Deduplicate inbound by waMessageId (avoid double-insert on retries)
-              if (m.id) {
-                const exists = await Message.findOne({ tenantId: tenant._id, waMessageId: m.id }).exec();
-                if (exists) {
-                  // Optionally update status/timestamps if needed
-                  // console.info("Inbound message already exists, skipping:", m.id);
-                  return;
-                }
-              }
+            // 2. Run conversation logic (flows, branching buttons, etc.)
+            const decision = await handleInboundAdvanced({
+              tenantId: tenantDoc._id.toString(),
+              fromWaId,
+              text: textBody,
+              payloadId,
+            });
 
-              // Create inbound message record
-              await Message.create({
-                tenantId: tenant._id,
-                direction: "IN",
-                body: text,
-                type: m.type ?? "text",
-                waMessageId: m.id,
-                status: "received",
-                createdAt: new Date()
-              });
-              // === Flow engine: decide auto-reply by per-tenant rules/templates ===
-              const decision = await handleInbound({ tenantId: tenant._id.toString(), fromWaId: from, text });
-              if (decision?.replyText) {
-                const idempotencyKey = `flow-reply:${m.id}`;
-                const existing = await Message.findOne({ tenantId: tenant._id, idempotencyKey }).lean().exec();
-                if (!existing) {
-                  const outMsg = await Message.create({
-                    tenantId: tenant._id,
-                    direction: "OUT",
-                    body: decision.replyText,
-                    type: "text",
-                    idempotencyKey,
-                    status: "queued"
-                  });
-                  await sendQueue.add(
-                    "send",
-                    {
-                      tenantId: tenant._id.toString(),
-                      messageId: outMsg._id.toString(),
-                      to: from,
-                      text: decision.replyText,
-                      idempotencyKey
-                    },
-                    { attempts: 5, backoff: { type: "exponential", delay: 2000 } }
-                  );
-                }
-              }
+            // 3. If engine says "reply", enqueue it
+            if (decision && decision.replyText) {
+              // for retry safety: don't send twice for same inbound
+              const idempotencyKey = `flow-reply:${waMessageId ?? createdMsg._id
+                }`;
 
+              // already sent a response for this inbound?
+              const existingOut = await Message.findOne({
+                tenantId: tenantDoc._id,
+                idempotencyKey,
+              })
+                .lean()
+                .exec();
 
-              /* // === NEW: Auto-reply to customer on behalf of tenant (commented out for now) ===
-              const replyText = `thanks for reaching us\n- team ${tenant.name}\n- By heart from Souvik`;
-              const idempotencyKey = `auto-reply:${m.id}`;
-              const existing = await Message.findOne({ tenantId: tenant._id, idempotencyKey }).lean().exec();
-              if (!existing) {
+              if (!existingOut) {
+                // create outbound message document
                 const outMsg = await Message.create({
-                  tenantId: tenant._id,
+                  tenantId: tenantDoc._id,
                   direction: "OUT",
-                  body: replyText,
-                  type: "text",
+                  body: decision.replyText,
+                  type: decision.replyKind ?? "text",
                   idempotencyKey,
-                  status: "queued"
+                  status: "queued",
+                  createdAt: new Date(),
                 });
-                // Enqueue for worker to send
+
+                // actually enqueue for worker.ts -> WhatsApp API
                 await sendQueue.add(
                   "send",
                   {
-                    tenantId: tenant._id.toString(),
+                    tenantId: tenantDoc._id.toString(),
                     messageId: outMsg._id.toString(),
-                    to: from,
-                    text: replyText,
-                    idempotencyKey
+                    to: fromWaId,
+                    content: {
+                      kind: decision.replyKind ?? "text",
+                      text: decision.replyText,
+                      buttons: decision.buttons,
+                    },
+                    idempotencyKey,
                   },
-                  { attempts: 5, backoff: { type: "exponential", delay: 2000 } }
+                  {
+                    attempts: 5,
+                    backoff: { type: "exponential", delay: 2000 },
+                  }
                 );
-              } */
-
-              // (static auto-reply removed; flow-based reply above is authoritative)
-
-            } catch (err) {
-              // log per-message errors but don't fail entire webhook processing
-              console.error("Error processing inbound message", { phoneNumberId, messageId: m?.id, err });
+              }
             }
-          }));
-        }
-
-        // Process statuses (delivery/read receipts)
-        const statuses = value?.statuses ?? [];
-        if (Array.isArray(statuses) && statuses.length > 0) {
-          for (const s of statuses) {
-            try {
-              if (!s?.id) continue;
-              // Update any message(s) with this waMessageId for this tenant
-              await Message.updateMany(
-                { tenantId: tenant._id, waMessageId: s.id },
-                { $set: { status: s.status ?? "unknown" } }
-              ).exec();
-            } catch (err) {
-              console.error("Error updating status for waMessageId", s?.id, err);
-            }
+          } catch (err) {
+            // Don't crash the whole webhook loop for one bad message
+            console.error("Error processing inbound message", {
+              phoneNumberId,
+              err,
+            });
           }
         }
 
-        // end processing this change
-      } // end for change
-    } // end for entry
+        // 4. Delivery / read receipts from WhatsApp (statuses[])
+        const statuses = Array.isArray(value?.statuses)
+          ? value.statuses
+          : [];
 
-    // 4) Return success quickly
-    return res.sendStatus(200);
-  } catch (err) {
-    console.error("webhook error", err);
-    return res.sendStatus(500);
+        if (statuses.length > 0) {
+          for (const s of statuses as any[]) {
+            try {
+              const waId = s?.id;
+              if (!waId) continue;
+
+              await Message.updateMany(
+                {
+                  tenantId: tenantDoc._id,
+                  waMessageId: waId,
+                },
+                {
+                  $set: {
+                    status: s.status ?? "unknown",
+                  },
+                }
+              ).exec();
+            } catch (err) {
+              console.error(
+                "Error updating message status for waMessageId",
+                s?.id,
+                err
+              );
+            }
+          }
+        }
+      }
+    }
+
+    // Always 200 so Meta doesn't retry aggressively unless we truly blew up
+    res.sendStatus(200);
   }
-});
+);
+
+export default router;

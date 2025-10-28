@@ -16,7 +16,7 @@ const tenantSchema = new Schema(
 );
 
 tenantSchema.pre("save", function (next) {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
+     
     const self = this as mongoose.Document & { updatedAt?: Date };
     self.updatedAt = new Date();
     next();
@@ -74,6 +74,20 @@ const templateSchema = new Schema(
         tenantId: { type: Schema.Types.ObjectId, required: true, index: true },
         key: { type: String, required: true }, // e.g. "welcome", "otp", "fallback"
         body: { type: String, required: true }, // e.g. "Hi {{name}}, your OTP is {{otp}}"
+        kind: {
+            type: String,
+            enum: ["text", "interactive_button"],
+            default: "text",
+            required: true,
+        },
+        buttons: [{
+            id: { type: String, required: true },        // stable payload we will get back from WhatsApp
+            title: { type: String, required: true },     // label user sees in WhatsApp
+
+            // branching info:
+            nextTemplateKey: { type: String },           // which template to send next automatically
+            nextState: { type: String },                 // optional conversation state transition
+        }],
         description: { type: String },
         variables: [{ type: String }], // e.g. ["name","otp"]
         isActive: { type: Boolean, default: true },
@@ -85,7 +99,7 @@ const templateSchema = new Schema(
 );
 templateSchema.index({ tenantId: 1, key: 1 }, { unique: true });
 templateSchema.pre("save", function (next) {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
+     
     const self = this as mongoose.Document & { updatedAt?: Date };
     self.updatedAt = new Date();
     next();
@@ -117,7 +131,7 @@ const flowSchema = new Schema(
     { versionKey: false }
 );
 flowSchema.pre("save", function (next) {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
+     
     const self = this as mongoose.Document & { updatedAt?: Date };
     self.updatedAt = new Date();
     next();
@@ -129,13 +143,14 @@ const conversationStateSchema = new Schema(
         tenantId: { type: Schema.Types.ObjectId, required: true, index: true },
         customerWaId: { type: String, required: true }, // E.164
         state: { type: String, default: "default" }, // free-form state label
+        lastTemplateKey: { type: String },
         updatedAt: { type: Date, default: Date.now }
     },
     { versionKey: false }
 );
 conversationStateSchema.index({ tenantId: 1, customerWaId: 1 }, { unique: true });
 conversationStateSchema.pre("save", function (next) {
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
+     
     const self = this as mongoose.Document & { updatedAt?: Date };
     self.updatedAt = new Date();
     next();
