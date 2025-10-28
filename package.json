@@ -12,7 +12,7 @@
         "lint:frontend": "cd frontend && eslint . --ext .ts,.tsx --max-warnings=0",
         "lint": "npm run lint:backend && npm run lint:frontend",
         "lint:fix:backend": "eslint . --ext .ts --fix",
-        "lint:fix:frontend": "cd frontend && eslint . --ext .ts,.tsx --fix",
+        "lint:fix:frontend": "cd frontend && npm run lint:fix",
         "typecheck:backend": "tsc -p tsconfig.json --noEmit",
         "typecheck:frontend": "cd frontend && tsc -p tsconfig.json --noEmit",
         "typecheck": "npm run typecheck:backend && npm run typecheck:frontend",
