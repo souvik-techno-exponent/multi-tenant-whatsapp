@@ -1,6 +1,8 @@
-// frontend/eslint.config.cjs  (flat-style config; NO "root" key)
+/* eslint-env node */
+/* eslint-disable @typescript-eslint/no-require-imports, no-undef */
 
-const path = require("path");
+// frontend/eslint.config.cjs  (flat-style config; NO "root" key")
+
 const { FlatCompat } = require("@eslint/eslintrc");
 // ensure we can translate "eslint:recommended" etc.
 const js = require("@eslint/js");
@@ -12,10 +14,29 @@ const compat = new FlatCompat({
 });
 
 module.exports = [
-    // ignore build artifacts
-    { ignores: ["dist/**", "build/**", "node_modules/**"] },
+    // 1) Ignore build artifacts and the config file(s) themselves
+    { ignores: ["**/eslint.config.*", "dist/**", "build/**", "node_modules/**"] },
 
-    // re-use common shareable configs/plugins (translates legacy "extends")
+    // 2) If ESLint ever touches a config file, treat it as Node+CJS and silence TS-specific complaints
+    {
+        files: ["**/eslint.config.*"],
+        languageOptions: {
+            ecmaVersion: 2022,
+            sourceType: "commonjs",
+            globals: {
+                require: "readonly",
+                module: "readonly",
+                __dirname: "readonly",
+            },
+        },
+        rules: {
+            "@typescript-eslint/no-require-imports": "off",
+            "@typescript-eslint/no-unused-vars": "off",
+            "no-undef": "off",
+        },
+    },
+
+    // 3) Re-use common shareable configs/plugins (translates legacy "extends")
     ...compat.extends(
         "eslint:recommended",
         "plugin:@typescript-eslint/recommended",
@@ -24,7 +45,7 @@ module.exports = [
         "plugin:jsx-a11y/recommended"
     ),
 
-    // project-specific overrides (TS / TSX / JS / JSX)
+    // 4) Project-specific overrides (TS / TSX / JS / JSX)
     {
         files: ["**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"],
         languageOptions: {
