@@ -9,11 +9,15 @@ const connection = new IORedis({
     port: Number(process.env.REDIS_PORT ?? 6379)
 });
 
+// MUST stay in sync with worker.ts SendJobData to avoid runtime breakage.
 export interface SendJobData {
     tenantId: string;
     messageId: string;
     to: string;
-    text: string;
+    content: {
+        kind: "text";        // for this endpoint we only send plain text
+        text: string;
+    };
     idempotencyKey: string;
 }
 
@@ -61,7 +65,10 @@ export async function enqueueSend(req: Request<SendParams, unknown, SendBody>, r
                 tenantId: tenant._id.toString(),
                 messageId: msgDoc._id.toString(),
                 to,
-                text,
+                content: {
+                    kind: "text",
+                    text
+                },
                 idempotencyKey: key
             },
             {
