@@ -14,7 +14,7 @@ ENV NPM_CONFIG_LEGACY_PEER_DEPS=true \
     NODE_ENV=development
 
 # install dependencies (dev)
-RUN npm i --silent --no-audit --no-fund
+RUN npm ci --silent --no-audit --no-fund
 
 # copy rest of the sources (will be mounted in docker-compose for live reload)
 COPY . .
