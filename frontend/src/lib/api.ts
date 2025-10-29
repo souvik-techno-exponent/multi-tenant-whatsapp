@@ -23,6 +23,8 @@ export type TemplateItem = {
     variables?: string[];
     isActive: boolean;
     version: number;
+    kind?: "text" | "interactive_button";
+    buttons?: { id: string; title: string; nextTemplateKey?: string; nextState?: string }[];
 };
 
 export async function listTemplatesApi(tenantId: string) {
@@ -30,10 +32,19 @@ export async function listTemplatesApi(tenantId: string) {
     return data.items as TemplateItem[];
 }
 
-export async function upsertTemplateApi(tenantId: string, payload: {
-    key: string; body: string; variables?: string[]; description?: string; isActive?: boolean;
-}) {
-    const { data } = await api.post(`/tenants/${tenantId}/templates`, payload);
+export async function upsertTemplateApi(
+    tenantId: string,
+    body: {
+        key?: string;
+        body: string;
+        variables?: string[];
+        description?: string;
+        isActive?: boolean;
+        kind?: "text" | "interactive_button";
+        buttons?: { id: string; title: string; nextTemplateKey?: string; nextState?: string }[];
+    }
+) {
+    const { data } = await api.post(`/tenants/${tenantId}/templates`, body);
     return data.template;
 }
 

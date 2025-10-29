@@ -45,10 +45,12 @@ app.post("/tenants/:tenantId/templates", async (req: Request, res: Response) => 
     if (!Types.ObjectId.isValid(tenantId)) {
         return res.status(400).json({ error: "invalid tenantId" });
     }
-    const { key, body, variables, description, isActive } = req.body || {};
-    if (!key || !body) return res.status(400).json({ error: "key and body required" });
+
+    const { key, body, description, isActive, variables, kind, buttons } = req.body || {};
+    if (!body) return res.status(400).json({ error: "body required" });
+
     try {
-        const doc = await upsertTemplate({ tenantId, key, body, variables, description, isActive });
+        const doc = await upsertTemplate({ tenantId, key, body, variables, description, isActive, kind, buttons });
         return res.json({ ok: true, template: { id: doc._id, key: doc.key, version: doc.version } });
     } catch (err) {
         console.error("templates route error", err);

@@ -1,9 +1,10 @@
 import { Template, TemplateDoc } from "./models";
 import { FilterQuery } from "mongoose";
+import { v4 as uuidv4 } from "uuid";
 
 export interface UpsertTemplateInput {
     tenantId: string;
-    key: string;
+    key?: string;
     body: string;
     variables?: string[];
     description?: string;
@@ -26,8 +27,10 @@ function extractVarsFromBody(s: string): string[] {
     return Array.from(set);
 }
 
+
 export async function upsertTemplate(input: UpsertTemplateInput): Promise<TemplateDoc> {
-    const { tenantId, key, body, variables, description, isActive } = input;
+    const { tenantId, body, variables, description, isActive } = input;
+    const key = (input.key && input.key.trim()) || `tmpl_${uuidv4().slice(0, 8)}`;
     const inferred = variables ?? extractVarsFromBody(body);
     const update = {
         $set: {
