@@ -1,4 +1,3 @@
-# docker-compose.yml (dev)
 services:
     app:
         build:
@@ -12,7 +11,11 @@ services:
             - "3000:3000"
         volumes:
             - ./:/usr/src/app:delegated
-            - app_node_modules:/usr/src/app/node_modules
+            - type: volume
+              source: app_node_modules
+              target: /usr/src/app/node_modules
+              volume:
+                  nocopy: true
         depends_on:
             - mongo
             - redis
@@ -28,7 +31,11 @@ services:
         command: ["npm", "run", "worker:dev"]
         volumes:
             - ./:/usr/src/app:delegated
-            - app_node_modules:/usr/src/app/node_modules
+            - type: volume
+              source: app_node_modules
+              target: /usr/src/app/node_modules
+              volume:
+                  nocopy: true
         depends_on:
             - mongo
             - redis
@@ -74,8 +81,12 @@ services:
             - "5173:5173"
         volumes:
             - ./frontend:/usr/src/app:delegated
-            - frontend_node_modules:/usr/src/app/node_modules
-        command: npm run dev -- --host 0.0.0.0 --port 5173
+            - type: volume
+              source: frontend_node_modules
+              target: /usr/src/app/node_modules
+              volume:
+                  nocopy: true
+        command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
         depends_on:
             - app
 
